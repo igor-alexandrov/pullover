@@ -35,6 +35,11 @@ struct PullRequestRow: View {
         .contentShape(Rectangle())
         .onHover { inside in if inside { model.pointAt(item.id) } }
         .onTapGesture { model.open(item) }
+        // After the tap gesture, so a click on the button can only ever open
+        // the menu, never the pull request as well.
+        .overlay(alignment: .topTrailing) {
+            if !compact { actionsMenu }
+        }
         .contextMenu { PRMenuItems(model: model, item: item) }
         .background {
             GeometryReader { geometry in
@@ -84,19 +89,9 @@ struct PullRequestRow: View {
                 .monospacedDigit()
                 .fixedSize()
                 Spacer(minLength: 0)
-                // Always in the layout, only revealed when active, so moving
-                // between rows never reflows them.
-                Menu {
-                    PRMenuItems(model: model, item: item)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .foregroundStyle(.secondary)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .opacity(isActive ? 1 : 0)
-                .help("Actions — M")
+                // Holds the actions button's place; the button itself is laid
+                // over the row, outside the tap that opens the pull request.
+                Color.clear.frame(width: Self.menuButtonSize.width)
             }
             .font(.caption)
             .frame(height: 15)
@@ -112,6 +107,29 @@ struct PullRequestRow: View {
             }
             .frame(height: 20)
         }
+    }
+
+    static let menuButtonSize = CGSize(width: 20, height: 15)
+
+    /// The same menu the right-click and the M key open — the button is only
+    /// the affordance that says it is there. Always in the layout, revealed
+    /// when the row is active, so moving between rows never reflows them.
+    private var actionsMenu: some View {
+        Menu {
+            PRMenuItems(model: model, item: item)
+        } label: {
+            Image(systemName: "ellipsis")
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: Self.menuButtonSize.width, height: Self.menuButtonSize.height)
+        .opacity(isActive ? 1 : 0)
+        .allowsHitTesting(isActive)
+        .help("Actions — M")
+        // Level with the meta line: the two text lines are centred in the row.
+        .padding(.top, (rowHeight - 37) / 2)
+        .padding(.trailing, leadingInset)
     }
 
     private var compactContent: some View {

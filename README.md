@@ -19,7 +19,7 @@ Pullover is a native macOS app, built with nothing but Apple's own tools: **Swif
 
 - 🎯 **Only what needs you.** Review requests, re-reviews, replies you owe, mentions — each PR sits under the reason it's there, longest wait first. The ones waiting on somebody else collapse into their own section.
 - 🧑‍💻 **Your own PRs, too** — when there's something for you to do: changes requested, a comment you haven't answered, red CI, merge conflicts, or approved and ready to merge.
-- 🔒 **Private repos and team requests**, including organisations that restrict OAuth Apps (their PRs are skipped with a warning instead of blanking the list).
+- 🔒 **Private repos and team requests.** If an organisation restricts OAuth Apps, its pull requests are left out and a notice names it; the list stays current for every organisation Pullover can see, rather than failing as a whole.
 - 🧬 **Stacks stay together** — a stacked PR shows its place in the chain (`2/4`), drawn as one connected run, dotted where a member is hidden.
 - 💤 **Snooze until new activity**, for 4 hours or until tomorrow, with Undo.
 - 📌 **Lives in the menu bar** with a quiet count; no Dock icon.

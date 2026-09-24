@@ -130,6 +130,10 @@ public final class Inbox {
         myLogin = nil
         prs = []
         rateLimitedUntil = nil
+        // The list on screen belongs to the old credentials too: if the new
+        // session's first fetch fails, it must not be left showing — or served
+        // to an agent — under the new one.
+        emit { $0 = .signedOut }
     }
 
     /// Starts a pass, or queues the one follow-up, without waiting for it.

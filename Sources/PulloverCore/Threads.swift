@@ -36,6 +36,15 @@ public func myLatestReview(_ pr: PullRequest, myLogin: String) -> Review? {
         .max { $0.submittedAt < $1.submittedAt }
 }
 
+/// Whether the branch moved past the commit `review` was made against. By SHA
+/// when both sides have one: a commit's date is when it was made, not pushed,
+/// so a rebased or cherry-picked commit pushed after the review can carry a
+/// date from before it. By date only when either SHA is unknown.
+public func hasCommitsSince(_ review: Review, in pr: PullRequest) -> Bool {
+    if let reviewed = review.commitSHA, let head = pr.headSHA { return reviewed != head }
+    return pr.lastCommitPushedAt > review.submittedAt
+}
+
 public func hasParticipated(_ pr: PullRequest, myLogin: String) -> Bool {
     if myLatestReview(pr, myLogin: myLogin) != nil { return true }
     if pr.reviewThreads.contains(where: { $0.comments.contains { $0.authorLogin == myLogin } }) { return true }

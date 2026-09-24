@@ -40,7 +40,7 @@ enum Queries {
           author { login avatarUrl }
           repository { nameWithOwner }
           reviews(last: 50) {
-            nodes { author { login } state submittedAt bodyText }
+            nodes { author { login } state submittedAt bodyText commit { oid } }
           }
           reviewThreads(last: 50) {
             nodes {

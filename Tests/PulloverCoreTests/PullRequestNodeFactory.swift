@@ -42,13 +42,14 @@ func comment(_ login: String?, _ createdAt: String, _ bodyText: String = "") -> 
     ["author": login.map { ["login": $0] as Any } ?? jsonNull, "createdAt": createdAt, "bodyText": bodyText]
 }
 
-func review(_ login: String?, _ state: String, _ submittedAt: String, bodyText: String? = nil) -> [String: Any] {
+func review(_ login: String?, _ state: String, _ submittedAt: String, bodyText: String? = nil, commitOID: String? = nil) -> [String: Any] {
     var review: [String: Any] = [
         "author": login.map { ["login": $0] as Any } ?? jsonNull,
         "state": state,
         "submittedAt": submittedAt,
     ]
     if let bodyText { review["bodyText"] = bodyText }
+    if let commitOID { review["commit"] = ["oid": commitOID] }
     return review
 }
 

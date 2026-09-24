@@ -12,7 +12,10 @@ struct InboxListView: View {
             ScrollView {
                 LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                     if showEmptyState {
-                        EmptyStateView(isError: model.snapshot.status == .error)
+                        EmptyStateView(
+                            isError: model.snapshot.status == .error,
+                            notice: model.snapshot.status == .ready ? model.snapshot.errorMessage : nil
+                        )
                             .frame(minHeight: sections.isEmpty ? 480 : 260)
                     }
                     ForEach(Array(sections.enumerated()), id: \.element.category) { index, section in
@@ -90,16 +93,22 @@ struct InboxSection: View {
 
 struct EmptyStateView: View {
     var isError: Bool
+    /// Why a fetch that succeeded is still incomplete — an organization whose
+    /// pull requests GitHub withheld. Not "inbox zero": some of it is unseen.
+    var notice: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            Image(systemName: isError ? "icloud.slash" : "checkmark")
+            Image(systemName: isError ? "icloud.slash" : notice != nil ? "eye.slash" : "checkmark")
                 .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(isError ? .red : .green)
-            Text(isError ? "Couldn't refresh" : "Inbox zero")
+                .foregroundStyle(isError ? .red : notice != nil ? .orange : .green)
+            Text(isError ? "Couldn't refresh" : notice != nil ? "Nothing visible waiting" : "Inbox zero")
                 .font(.system(size: 13, weight: .semibold))
                 .padding(.top, 14)
-            Text(isError ? "What you see may be stale or incomplete." : "Nothing waiting on you. Great job, buddy.")
+            Text(isError
+                ? "What you see may be stale or incomplete."
+                : notice.map { "Up to date for everything else, but \($0) — their pull requests aren't shown." }
+                    ?? "Nothing waiting on you. Great job, buddy.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 3)

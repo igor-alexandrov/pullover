@@ -712,6 +712,21 @@ struct InboxRefreshTests {
         #expect(login.calls.count == 2)
         #expect(inbox.snapshot.myLogin == "new-user")
     }
+
+    @Test func showsNothingOfThePreviousAccountWhenTheNewOnesFirstFetchFails() async {
+        let fetch = FakeFetch([.success(fetched([pr("PR_1", buckets: [.reviewRequested])])), .failure(TestError("boom"))])
+        let inbox = makeInbox(narrowStore(defaults), fetch: fetch, login: FakeLogin(["old-user", "new-user"]))
+        await inbox.refresh()
+        #expect(!inbox.snapshot.items.isEmpty)
+
+        inbox.sessionDidChange()
+        #expect(inbox.snapshot == InboxSnapshot.signedOut)
+
+        await inbox.refresh()
+        #expect(inbox.snapshot.status == .error)
+        #expect(inbox.snapshot.items.isEmpty)
+        #expect(inbox.snapshot.myLogin == nil)
+    }
 }
 
 @MainActor

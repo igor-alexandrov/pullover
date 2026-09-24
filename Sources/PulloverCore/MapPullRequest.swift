@@ -25,6 +25,11 @@ public struct PullRequestNode: Decodable, Sendable {
         /// Null for a review still pending, which is only ever the viewer's own.
         public var submittedAt: Date?
         public var bodyText: String?
+        /// The commit the review was made against. Optional because GitHub
+        /// returns null once that commit is gone, and so older fixtures decode.
+        public var commit: CommitRef?
+
+        public struct CommitRef: Decodable, Sendable { public var oid: String }
     }
 
     public struct ThreadNode: Decodable, Sendable {
@@ -170,7 +175,13 @@ public func mapPullRequest(_ node: PullRequestNode, buckets: [SearchBucket], myL
     let reviews: [Review] = node.reviews.nodes.compactMap { review in
         guard let review, let author = review.author, let submittedAt = review.submittedAt,
               let state = ReviewState(rawValue: review.state) else { return nil }
-        return Review(authorLogin: author.login, state: state, submittedAt: submittedAt, bodyText: review.bodyText ?? "")
+        return Review(
+            authorLogin: author.login,
+            state: state,
+            submittedAt: submittedAt,
+            bodyText: review.bodyText ?? "",
+            commitSHA: review.commit?.oid
+        )
     }
 
     return PullRequest(

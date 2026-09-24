@@ -80,6 +80,44 @@ private func repliedThread(id: String = "thread-1", replyAt: String = "2026-08-0
             #expect(result.reason == "New commits")
         }
 
+        @Test("re-review when a rebased commit dated before my review replaced the one I reviewed")
+        func reReviewOnBackdatedCommit() {
+            let pr = makePullRequest {
+                $0.buckets = [.involves]
+                $0.reviews = [makeReview(me, "2026-08-05T10:00:00Z", state: .changesRequested, commitSHA: "reviewed")]
+                $0.headSHA = "rebased"
+                $0.lastCommitPushedAt = d("2026-08-03T10:00:00Z")
+            }
+            let result = classify(pr, context: ctx())
+            #expect(result.category == .reReview)
+            #expect(result.reason == "New commits")
+        }
+
+        @Test("no re-review while the head is still the commit I reviewed, whatever its date says")
+        func noReReviewOnSameCommit() {
+            let pr = makePullRequest {
+                $0.buckets = [.involves]
+                $0.reviews = [makeReview(me, "2026-08-05T10:00:00Z", state: .changesRequested, commitSHA: "reviewed")]
+                $0.headSHA = "reviewed"
+                $0.lastCommitPushedAt = d("2026-08-06T10:00:00Z")
+            }
+            #expect(classify(pr, context: ctx()).category == .waiting)
+        }
+
+        @Test("falls back to dates for a review with no recorded commit") func reReviewDateFallback() {
+            let newer = makePullRequest {
+                $0.buckets = [.involves]
+                $0.reviews = [makeReview(me, "2026-08-05T10:00:00Z", state: .changesRequested)]
+                $0.headSHA = "head"
+                $0.lastCommitPushedAt = d("2026-08-06T10:00:00Z")
+            }
+            #expect(classify(newer, context: ctx()).reason == "New commits")
+
+            var older = newer
+            older.lastCommitPushedAt = d("2026-08-04T10:00:00Z")
+            #expect(classify(older, context: ctx()).category == .waiting)
+        }
+
         @Test("re-review when review was re-requested after I reviewed") func reReviewOnRequest() {
             let pr = makePullRequest {
                 $0.buckets = [.reviewRequested, .involves]
@@ -405,6 +443,20 @@ private func repliedThread(id: String = "thread-1", replyAt: String = "2026-08-0
                 $0.buckets = [.involves]
                 $0.reviews = [makeReview(me, "2026-08-01T10:00:00Z", state: .changesRequested)]
                 $0.lastCommitPushedAt = d("2026-08-05T10:00:00Z")
+                $0.updatedAt = d("2026-08-10T11:00:00Z")
+            }
+            let result = classify(pr, context: ctx())
+            #expect(result.reason == "New commits")
+            #expect(result.waitingSince == d("2026-08-05T10:00:00Z"))
+        }
+
+        @Test("never dates new commits from before my review, even when the commit is backdated")
+        func reReviewNotBeforeMyReview() {
+            let pr = makePullRequest {
+                $0.buckets = [.involves]
+                $0.reviews = [makeReview(me, "2026-08-05T10:00:00Z", state: .changesRequested, commitSHA: "reviewed")]
+                $0.headSHA = "rebased"
+                $0.lastCommitPushedAt = d("2026-08-03T10:00:00Z")
                 $0.updatedAt = d("2026-08-10T11:00:00Z")
             }
             let result = classify(pr, context: ctx())

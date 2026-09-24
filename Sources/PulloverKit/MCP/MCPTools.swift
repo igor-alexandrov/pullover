@@ -29,6 +29,9 @@ public final class MCPTools {
             return rpcError("Invalid Request", code: -32600)
         }
         let id = fields["id"]
+        guard fields["jsonrpc"]?.stringValue == "2.0" else {
+            return rpcError("Invalid Request: jsonrpc must be \"2.0\"", code: -32600, id: id ?? .null)
+        }
         guard let method = fields["method"]?.stringValue else {
             // A response from the client, or garbage without an id: nothing to say.
             return id == nil ? nil : rpcError("Invalid Request", code: -32600, id: id ?? .null)

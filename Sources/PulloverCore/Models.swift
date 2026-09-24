@@ -63,12 +63,16 @@ public struct Review: Hashable, Codable, Sendable {
     public var state: ReviewState
     public var submittedAt: Date
     public var bodyText: String
+    /// The head commit the review was submitted against. Nil when GitHub no
+    /// longer has that commit, or for a review cached before it was fetched.
+    public var commitSHA: String?
 
-    public init(authorLogin: String, state: ReviewState, submittedAt: Date, bodyText: String = "") {
+    public init(authorLogin: String, state: ReviewState, submittedAt: Date, bodyText: String = "", commitSHA: String? = nil) {
         self.authorLogin = authorLogin
         self.state = state
         self.submittedAt = submittedAt
         self.bodyText = bodyText
+        self.commitSHA = commitSHA
     }
 }
 

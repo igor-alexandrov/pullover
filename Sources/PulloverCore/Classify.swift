@@ -63,8 +63,11 @@ private func classifyReviewPR(_ pr: PullRequest, myLogin: String) -> Verdict {
             let asked = pr.reviewRequestedAt.flatMap { $0 > myReview.submittedAt ? $0 : nil } ?? pr.updatedAt
             return Verdict(category: .reReview, reason: "Re-review requested", waitingSince: asked)
         }
-        if pr.lastCommitPushedAt > myReview.submittedAt {
-            return Verdict(category: .reReview, reason: "New commits", waitingSince: pr.lastCommitPushedAt)
+        if hasCommitsSince(myReview, in: pr) {
+            // A backdated commit can predate my review, but a push I have not
+            // seen cannot have been waiting on me since before I reviewed.
+            let pushed = max(pr.lastCommitPushedAt, myReview.submittedAt)
+            return Verdict(category: .reReview, reason: "New commits", waitingSince: pushed)
         }
     }
 

@@ -114,6 +114,12 @@ private func json(_ response: HTTPResponse) -> JSONValue? {
         #expect(json(response) == ["jsonrpc": "2.0", "id": 1, "result": [:]])
     }
 
+    @Test func refusesAnEmptyBatchAsAnInvalidRequest() async {
+        let response = await respond(post(body: Data("[]".utf8)))
+        #expect(response.status == 400)
+        #expect(json(response)?["error"]?["code"] == -32600)
+    }
+
     @Test func answers202WithNoBodyToANotification() async {
         let response = await respond(post(body: Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
         #expect(response.status == 202)

@@ -20,9 +20,10 @@ func makeReview(
     _ authorLogin: String,
     _ submittedAt: String,
     state: ReviewState = .commented,
-    bodyText: String = ""
+    bodyText: String = "",
+    commitSHA: String? = nil
 ) -> Review {
-    Review(authorLogin: authorLogin, state: state, submittedAt: d(submittedAt), bodyText: bodyText)
+    Review(authorLogin: authorLogin, state: state, submittedAt: d(submittedAt), bodyText: bodyText, commitSHA: commitSHA)
 }
 
 func makeThread(id: String = "thread-1", isResolved: Bool = false, comments: [ThreadComment] = []) -> ReviewThread {

@@ -120,6 +120,16 @@ struct MCPProtocolTests {
         #expect(await h.request("ping", id: "abc") == ["jsonrpc": "2.0", "id": "abc", "result": [:]])
     }
 
+    @Test func refusesARequestWithoutJSONRPC2() async {
+        let h = await MCPHarness()
+        let missing = await h.tools.handle(["id": 7, "method": "ping"])
+        #expect(missing?["error"]?["code"] == -32600)
+        #expect(missing?["id"] == 7)
+        let wrong = await h.tools.handle(["jsonrpc": "1.0", "id": 8, "method": "tools/list"])
+        #expect(wrong?["error"]?["code"] == -32600)
+        #expect(wrong?["result"] == nil)
+    }
+
     @Test func staysSilentForANotification() async {
         let h = await MCPHarness()
         #expect(await h.tools.handle(["jsonrpc": "2.0", "method": "notifications/initialized"]) == nil)

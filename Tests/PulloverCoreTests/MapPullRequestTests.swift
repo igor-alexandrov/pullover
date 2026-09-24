@@ -70,6 +70,15 @@ private func map(_ n: PullRequestNode, _ buckets: [SearchBucket] = []) -> PullRe
             #expect(pr.reviews == [makeReview("bob", "2026-08-02T10:00:00Z", state: .approved)])
         }
 
+        @Test("reads the commit each review was made against, nil when GitHub sends none") func reviewCommitSHA() {
+            let pr = map(node(["reviews": nodes([
+                review("bob", "APPROVED", "2026-08-02T10:00:00Z", commitOID: "abc123"),
+                review("carol", "COMMENTED", "2026-08-03T10:00:00Z"),
+                ["author": ["login": "dave"], "state": "COMMENTED", "submittedAt": "2026-08-04T10:00:00Z", "commit": jsonNull],
+            ])]))
+            #expect(pr.reviews.map(\.commitSHA) == ["abc123", nil, nil])
+        }
+
         @Test("preserves the order of reviews") func reviewOrder() {
             let pr = map(node(["reviews": nodes([
                 review("first", "APPROVED", "2026-08-01T09:00:00Z"),

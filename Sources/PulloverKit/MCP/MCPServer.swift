@@ -207,6 +207,8 @@ public final class MCPServer {
 
         let closed = HTTPResponse.json(503, rpcError("The MCP server was stopped"))
         if case let .array(batch) = message {
+            // JSON-RPC: an empty batch is an invalid request, not a batch of notifications.
+            guard !batch.isEmpty else { return .json(400, rpcError("Invalid Request: empty batch", code: -32600)) }
             var replies: [JSONValue] = []
             for each in batch {
                 guard isOpen() else { return closed }

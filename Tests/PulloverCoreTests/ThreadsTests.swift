@@ -130,6 +130,31 @@ private func authored(_ configure: (inout PullRequest) -> Void = { _ in }) -> Pu
         }
     }
 
+    @Suite("hasCommitsSince") struct HasCommitsSince {
+        private let review = makeReview(me, "2026-08-05T10:00:00Z", commitSHA: "reviewed")
+
+        @Test("sees a new head even when its commit is dated before the review") func backdatedNewHead() {
+            let pr = makePullRequest { $0.headSHA = "rebased"; $0.lastCommitPushedAt = d("2026-08-01T10:00:00Z") }
+            #expect(hasCommitsSince(review, in: pr))
+        }
+
+        @Test("sees nothing new at the reviewed head even when its date is later") func sameHeadLaterDate() {
+            let pr = makePullRequest { $0.headSHA = "reviewed"; $0.lastCommitPushedAt = d("2026-08-09T10:00:00Z") }
+            #expect(!hasCommitsSince(review, in: pr))
+        }
+
+        @Test("falls back to dates when the review has no SHA") func reviewWithoutSHA() {
+            let old = makeReview(me, "2026-08-05T10:00:00Z")
+            #expect(hasCommitsSince(old, in: makePullRequest { $0.headSHA = "x"; $0.lastCommitPushedAt = d("2026-08-06T10:00:00Z") }))
+            #expect(!hasCommitsSince(old, in: makePullRequest { $0.headSHA = "x"; $0.lastCommitPushedAt = d("2026-08-04T10:00:00Z") }))
+        }
+
+        @Test("falls back to dates when the head has no SHA") func headWithoutSHA() {
+            #expect(hasCommitsSince(review, in: makePullRequest { $0.lastCommitPushedAt = d("2026-08-06T10:00:00Z") }))
+            #expect(!hasCommitsSince(review, in: makePullRequest { $0.lastCommitPushedAt = d("2026-08-04T10:00:00Z") }))
+        }
+    }
+
     // compareIso is not ported: it orders ISO strings, and Swift compares `Date`s directly.
 
     @Suite("hasParticipated") struct HasParticipated {
