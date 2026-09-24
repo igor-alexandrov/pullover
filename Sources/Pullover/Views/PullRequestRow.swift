@@ -19,6 +19,13 @@ struct PullRequestRow: View {
     private var leadingInset: CGFloat { compact ? 8 : 6 }
     private var rowHeight: CGFloat { compact ? 30 : 56 }
 
+    // The comfortable row's two lines. Fixed heights, so the row's layout — and
+    // the actions button laid over it — is arithmetic rather than measured.
+    static let metaLineHeight: CGFloat = 15
+    static let titleLineHeight: CGFloat = 20
+    static let lineSpacing: CGFloat = 2
+    static let contentHeight = metaLineHeight + lineSpacing + titleLineHeight
+
     var body: some View {
         HStack(spacing: compact ? 8 : 10) {
             AvatarView(login: pr.authorLogin, urlString: pr.authorAvatarURL, size: avatarSize)
@@ -57,7 +64,7 @@ struct PullRequestRow: View {
     }
 
     private var comfortableContent: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Self.lineSpacing) {
             HStack(spacing: 8) {
                 // The owner is dropped: it is the same for most of the list.
                 // It comes back on hover, where two same-named repos differ.
@@ -94,7 +101,7 @@ struct PullRequestRow: View {
                 Color.clear.frame(width: Self.menuButtonSize.width)
             }
             .font(.caption)
-            .frame(height: 15)
+            .frame(height: Self.metaLineHeight)
 
             HStack(spacing: 8) {
                 Text(pr.title)
@@ -105,11 +112,11 @@ struct PullRequestRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 RowStatus(ci: pr.ciStatus, reason: item.reason)
             }
-            .frame(height: 20)
+            .frame(height: Self.titleLineHeight)
         }
     }
 
-    static let menuButtonSize = CGSize(width: 20, height: 15)
+    static let menuButtonSize = CGSize(width: 20, height: metaLineHeight)
 
     /// The same menu the right-click and the M key open — the button is only
     /// the affordance that says it is there. Always in the layout, revealed
@@ -128,7 +135,7 @@ struct PullRequestRow: View {
         .allowsHitTesting(isActive)
         .help("Actions — M")
         // Level with the meta line: the two text lines are centred in the row.
-        .padding(.top, (rowHeight - 37) / 2)
+        .padding(.top, (rowHeight - Self.contentHeight) / 2)
         .padding(.trailing, leadingInset)
     }
 
