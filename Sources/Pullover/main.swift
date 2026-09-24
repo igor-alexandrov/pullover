@@ -31,5 +31,7 @@ MainActor.assumeIsolated {
     app.delegate = delegate
     // A menu-bar app: no Dock icon, no entry in the app switcher.
     app.setActivationPolicy(.accessory)
-    app.run()
+    // `NSApplication.delegate` is weak, and ARC may end a local's lifetime at
+    // its last use — so pin it until `run()` returns.
+    withExtendedLifetime(delegate) { app.run() }
 }

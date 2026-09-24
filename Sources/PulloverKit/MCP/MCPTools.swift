@@ -160,7 +160,8 @@ public final class MCPTools {
             case let .success((repository, number)):
                 var hours: Int?
                 if let raw = arguments["hours"], raw != .null {
-                    guard let value = raw.numberValue, value.rounded() == value, (1...336).contains(value) else {
+                    // The exact integer, so a huge or fractional number is refused rather than converted.
+                    guard let value = raw.integerValue, (1...336).contains(value) else {
                         return toolError("Invalid arguments: hours must be a whole number from 1 to 336")
                     }
                     hours = Int(value)
@@ -186,10 +187,11 @@ public final class MCPTools {
         guard let repository = arguments["repository"]?.stringValue, !repository.isEmpty else {
             return .failure("Invalid arguments: repository is required, as owner/repo")
         }
-        guard let number = arguments["number"]?.numberValue, number.rounded() == number, number > 0 else {
+        // `integerValue` is nil for `1e20` and the like, which `Int(_:)` would trap on.
+        guard let raw = arguments["number"]?.integerValue, raw > 0, let number = Int(exactly: raw) else {
             return .failure("Invalid arguments: number is required, as a positive whole number")
         }
-        return .success((repository, Int(number)))
+        return .success((repository, number))
     }
 
     private func getInbox(includeWaiting: Bool) async -> JSONValue {
@@ -237,9 +239,9 @@ public final class MCPTools {
         }
         if let refusal = refusalIfHidden(item) { return refusal }
         if let hours {
-            store.snooze(item.pr.id, type: .untilTime, now: now(), hours: hours)
+            store.snooze(item.pr.id, type: .untilTime, now: now(), hours: hours, headSHA: item.pr.headSHA)
         } else {
-            store.snooze(item.pr.id, type: .untilActivity, now: now())
+            store.snooze(item.pr.id, type: .untilActivity, now: now(), headSHA: item.pr.headSHA)
         }
         return reportAfterChange(repository, number)
     }

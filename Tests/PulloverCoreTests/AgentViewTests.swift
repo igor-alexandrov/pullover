@@ -78,6 +78,7 @@ private func snapshot(
             item(.needsReview, {
                 $0.repository = "acme/web"
                 $0.number = 12
+                $0.url = "https://github.com/acme/web/pull/12"
                 $0.title = "Retry writes"
                 $0.authorLogin = "kate"
                 $0.headRefName = "kate/retry"
@@ -90,7 +91,7 @@ private func snapshot(
             repository: "acme/web",
             number: 12,
             title: "Retry writes",
-            url: "https://github.com/acme/web/pull/1",
+            url: "https://github.com/acme/web/pull/12",
             author: "kate",
             category: .needsReview,
             reason: "Review requested",

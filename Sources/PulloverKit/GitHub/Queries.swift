@@ -32,6 +32,7 @@ enum Queries {
           deletions
           headRefName
           baseRefName
+          isCrossRepository
           reviewDecision
           mergeable
           autoMergeRequest { enabledAt }
@@ -56,6 +57,7 @@ enum Queries {
           commits(last: 1) {
             nodes {
               commit {
+                oid
                 committedDate
                 statusCheckRollup { state }
               }

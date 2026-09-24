@@ -33,6 +33,9 @@ public struct URLSessionGraphQLClient: GraphQLClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError {
+            // A cancelled fetch is not a network failure: wrapped as one it
+            // would read as transient and be asked again.
+            if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
             throw GitHubError.network(error.localizedDescription)
         }
         guard let http = response as? HTTPURLResponse else {

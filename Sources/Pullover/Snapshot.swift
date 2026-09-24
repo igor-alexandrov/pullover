@@ -7,6 +7,11 @@ import SwiftUI
 /// For documentation and for checking a layout change without a screen.
 @MainActor
 enum Snapshot {
+    private static func fail(_ message: String) -> Never {
+        FileHandle.standardError.write(Data("snapshot failed: \(message)\n".utf8))
+        exit(1)
+    }
+
     static func run(to path: String) {
         let state = ProcessInfo.processInfo.environment["PULLOVER_SNAPSHOT_STATE"] ?? ""
         let model = AppModel()
@@ -32,12 +37,25 @@ enum Snapshot {
             window.backgroundColor = .windowBackgroundColor
             window.contentView = view
             window.orderFrontRegardless()
-            try? await Task.sleep(for: .seconds(2))
+
+            // The rows ask for their avatars once drawn; wait for every one to
+            // land (or fail) rather than guessing how long the network takes.
+            try? await Task.sleep(for: .milliseconds(500))
+            for _ in 0..<60 where !AvatarCache.shared.isIdle {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            guard AvatarCache.shared.isIdle else { fail("avatars were still loading after 30 seconds") }
+            try? await Task.sleep(for: .milliseconds(500))
 
             view.layoutSubtreeIfNeeded()
-            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { fail("could not allocate a bitmap") }
             view.cacheDisplay(in: view.bounds, to: rep)
-            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            guard let png = rep.representation(using: .png, properties: [:]) else { fail("could not encode a PNG") }
+            do {
+                try png.write(to: URL(fileURLWithPath: path))
+            } catch {
+                fail("could not write \(path): \(error.localizedDescription)")
+            }
             exit(0)
         }
     }

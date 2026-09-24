@@ -101,8 +101,16 @@ public struct PullRequest: Hashable, Codable, Sendable, Identifiable {
     public var deletions: Int
     public var headRefName: String
     public var baseRefName: String
+    /// Whether the head branch lives in a fork rather than in `repository`.
+    /// Such a `headRefName` names no branch of this repository.
+    public var isCrossRepository: Bool
     public var ciStatus: CIStatus
+    /// When the head commit was *made*, which is not when it reached the
+    /// branch: a rebase or cherry-pick pushes commits dated in the past.
     public var lastCommitPushedAt: Date
+    /// The head commit's SHA, or nil when it wasn't fetched. What a snooze
+    /// compares to notice a push, since the date above can't be trusted to.
+    public var headSHA: String?
     public var reviewDecision: ReviewDecision?
     public var mergeable: MergeableState
     /// Whether auto-merge is armed, so GitHub will merge this itself once checks pass.
@@ -135,8 +143,10 @@ public struct PullRequest: Hashable, Codable, Sendable, Identifiable {
         deletions: Int = 0,
         headRefName: String = "",
         baseRefName: String = "main",
+        isCrossRepository: Bool = false,
         ciStatus: CIStatus = .none,
         lastCommitPushedAt: Date,
+        headSHA: String? = nil,
         reviewDecision: ReviewDecision? = nil,
         mergeable: MergeableState = .mergeable,
         hasAutoMerge: Bool = false,
@@ -162,8 +172,10 @@ public struct PullRequest: Hashable, Codable, Sendable, Identifiable {
         self.deletions = deletions
         self.headRefName = headRefName
         self.baseRefName = baseRefName
+        self.isCrossRepository = isCrossRepository
         self.ciStatus = ciStatus
         self.lastCommitPushedAt = lastCommitPushedAt
+        self.headSHA = headSHA
         self.reviewDecision = reviewDecision
         self.mergeable = mergeable
         self.hasAutoMerge = hasAutoMerge
@@ -249,12 +261,16 @@ public struct Snooze: Hashable, Codable, Sendable {
     public var snoozedAt: Date
     /// Only set when `type == .untilTime`.
     public var until: Date?
+    /// The head commit when the snooze was set, so any push wakes it. Nil for
+    /// snoozes saved before it was recorded, which fall back to the date.
+    public var headSHA: String?
 
-    public init(prId: String, type: SnoozeType, snoozedAt: Date, until: Date? = nil) {
+    public init(prId: String, type: SnoozeType, snoozedAt: Date, until: Date? = nil, headSHA: String? = nil) {
         self.prId = prId
         self.type = type
         self.snoozedAt = snoozedAt
         self.until = until
+        self.headSHA = headSHA
     }
 }
 

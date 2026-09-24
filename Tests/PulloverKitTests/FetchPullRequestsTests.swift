@@ -322,6 +322,72 @@ struct FetchPullRequestsTests {
         #expect(error.map(describeError)?.contains("Something went wrong") == true)
     }
 
+    @Test func excludesARestrictedOrgNamedAlongsideAnUnrelatedErrorAndKeepsTheRetrysAnswer() async throws {
+        let mixed = graphqlError(
+            [restrictionMessage("status-im"), "Something went wrong while executing your query."],
+            data: nil
+        )
+        let client = FakeGraphQLClient { call in
+            switch call.kind {
+            case .search:
+                if !call.q.contains("-org:status-im") { throw mixed }
+                return searchResult(call.q.contains("author:@me") ? ["PR_1"] : [])
+            case .details: return detailsResult([detailNode("PR_1")])
+            case .viewer: throw TestError("unexpected query")
+            }
+        }
+
+        let result = try await fetchPullRequests(client, myLogin: "vlad")
+
+        #expect(result.prs.map(\.id) == ["PR_1"])
+        #expect(result.restrictedOrgs == ["status-im"])
+        #expect(client.calls(.search).count == 8)
+    }
+
+    @Test func surfacesAnUnrelatedErrorThatOutlivesTheExclusion() async {
+        let mixed = graphqlError(
+            [restrictionMessage("status-im"), "Something went wrong while executing your query."],
+            data: searchResult(["PR_1"])
+        )
+        let unrelated = graphqlError(["Something went wrong while executing your query."], data: searchResult(["PR_1"]))
+        let client = FakeGraphQLClient { call in
+            if call.kind == .search { throw call.q.contains("-org:status-im") ? unrelated : mixed }
+            throw TestError("unexpected query")
+        }
+
+        await #expect(throws: unrelated) { try await fetchPullRequests(client, myLogin: "vlad") }
+        // Every bucket did ask again without the org before giving up.
+        #expect(client.calls(.search).contains { $0.q.contains("-org:status-im") })
+    }
+
+    @Test func doesNotRetryASearchOnceTheFetchIsCancelled() async {
+        let client = FakeGraphQLClient { call in
+            guard call.kind == .search else { throw TestError("unexpected query") }
+            // The network error a cancelled request can surface as, arriving
+            // after the fetch was cancelled.
+            withUnsafeCurrentTask { $0?.cancel() }
+            throw GitHubError.network("cancelled")
+        }
+
+        await #expect(throws: CancellationError.self) { try await fetchPullRequests(client, myLogin: "vlad") }
+        #expect(client.calls(.search).count == 4)
+    }
+
+    @Test func doesNotRetryOrSplitADetailBatchOnceTheFetchIsCancelled() async {
+        let client = FakeGraphQLClient { call in
+            switch call.kind {
+            case .search: return searchResult(call.q.contains("author:@me") ? ["PR_1", "PR_2"] : [])
+            case .details:
+                withUnsafeCurrentTask { $0?.cancel() }
+                throw httpError(502)
+            case .viewer: throw TestError("unexpected query")
+            }
+        }
+
+        await #expect(throws: CancellationError.self) { try await fetchPullRequests(client, myLogin: "vlad") }
+        #expect(client.calls(.details).count == 1)
+    }
+
     @Test func stopsAskingOnceGitHubNamesTheSameOrgTwiceKeepingWhatItReturned() async throws {
         let stuck = graphqlError(
             ["the `status-im` organization has enabled OAuth App access restrictions"],
@@ -418,6 +484,60 @@ struct FetchPullRequestsTests {
         let result = try await fetchPullRequests(client, myLogin: "vlad")
         #expect(result.prs.map(\.id) == ["PR_1"])
         #expect(result.restrictedOrgs == ["status-im"])
+    }
+}
+
+@Suite struct MeteredClientTests {
+    @Test func countsTheCostOfAnErrorResponseThatStillCarriedData() async {
+        let meter = RateMeter()
+        let partial: JSONValue = [
+            "rateLimit": ["cost": 3, "remaining": 4200, "resetAt": "2026-08-10T13:00:00Z"],
+            "search": ["nodes": []],
+        ]
+        let inner = FakeGraphQLClient { _ in throw graphqlError(["Something went wrong"], data: partial) }
+        let client = MeteredClient(inner: inner, meter: meter)
+
+        await #expect(throws: graphqlError(["Something went wrong"], data: partial)) {
+            try await client.execute(Queries.search, variables: [:])
+        }
+        #expect(await meter.cost == 3)
+        #expect(await meter.lowest?.remaining == 4200)
+    }
+
+    @Test func recordsNothingForAnErrorWithoutData() async {
+        let meter = RateMeter()
+        let client = MeteredClient(inner: FakeGraphQLClient { _ in throw httpError(502) }, meter: meter)
+
+        await #expect(throws: httpError(502)) { try await client.execute(Queries.search, variables: [:]) }
+        #expect(await meter.cost == 0)
+    }
+}
+
+/// Never answers; announces each request it is handed.
+private final class HangingURLProtocol: URLProtocol, @unchecked Sendable {
+    static let started = Gate()
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { Self.started.open() }
+    override func stopLoading() {}
+}
+
+@Suite(.timeLimit(.minutes(1)))
+struct URLSessionGraphQLClientCancellationTests {
+    @Test func reportsACancelledRequestAsCancellationRatherThanANetworkFailure() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HangingURLProtocol.self]
+        let client = URLSessionGraphQLClient(token: "t", session: URLSession(configuration: configuration))
+
+        let request = Task { try await client.execute(Queries.viewer, variables: [:]) }
+        // Cancelled mid-flight, so URLSession itself reports URLError.cancelled.
+        await HangingURLProtocol.started.wait()
+        request.cancel()
+
+        let error = await #expect(throws: (any Error).self) { try await request.value }
+        #expect(error is CancellationError)
+        #expect(!isTransientError(error ?? CancellationError()))
     }
 }
 

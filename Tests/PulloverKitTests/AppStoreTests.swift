@@ -116,6 +116,17 @@ private let NOW = d("2026-08-10T12:00:00Z")
         #expect(stored(#"{"pollIntervalMinutes":0}"#).settings.pollIntervalMinutes == 5)
     }
 
+    // Inbox.start multiplies by 60; Int.max would trap there.
+    @Test(arguments: [Int.max, 1441, -1])
+    func replacesAPollIntervalOutsideAMinuteToADay(minutes: Int) {
+        #expect(stored(#"{"pollIntervalMinutes":\#(minutes)}"#).settings.pollIntervalMinutes == 5)
+    }
+
+    @Test(arguments: [1, 1440])
+    func keepsAPollIntervalAtEitherEndOfTheRange(minutes: Int) {
+        #expect(stored(#"{"pollIntervalMinutes":\#(minutes)}"#).settings.pollIntervalMinutes == minutes)
+    }
+
     @Test func fallsBackToTheDefaultsWhenTheStoredSettingsAreNotJSON() {
         #expect(stored("not json").settings == .defaults)
     }
@@ -159,6 +170,12 @@ private let NOW = d("2026-08-10T12:00:00Z")
         store.removeRepository("acme/web")
         #expect(store.settings.repositories == ["acme/api"])
     }
+
+    @Test func removesARepositorySavedInMixedCaseByAnOlderBuild() {
+        store.updateSettings { $0.repositories = ["Acme/Web", "acme/api"] }
+        store.removeRepository("acme/web")
+        #expect(store.settings.repositories == ["acme/api"])
+    }
 }
 
 @Suite struct AppStoreSnoozeTests {
@@ -180,6 +197,11 @@ private let NOW = d("2026-08-10T12:00:00Z")
         #expect(snooze != nil && snooze?.until == nil)
     }
 
+    @Test func recordsTheHeadASnoozeWasSetOn() {
+        store.snooze("PR_1", type: .untilActivity, now: NOW, headSHA: "abc123")
+        #expect(store.snoozes["PR_1"]?.headSHA == "abc123")
+    }
+
     @Test func ignoresHoursForAConditionalSnooze() {
         store.snooze("PR_1", type: .untilActivity, now: NOW, hours: 3)
         #expect(store.snoozes["PR_1"]?.until == nil)
@@ -187,6 +209,15 @@ private let NOW = d("2026-08-10T12:00:00Z")
 
     // "requires hours for a timed snooze": the Swift `snooze` does not throw;
     // a timed snooze without hours falls back to 24.
+
+    // Whole-second persistence would read `until` back up to a second early.
+    @Test func keepsFractionalSecondsThroughASaveAndLoad() {
+        let now = NOW.addingTimeInterval(0.25)
+        store.snooze("PR_1", type: .untilTime, now: now, hours: 3)
+        let snooze = defaults.makeStore().snoozes["PR_1"]
+        #expect(snooze?.snoozedAt == now)
+        #expect(snooze?.until == now.addingTimeInterval(3 * 3600))
+    }
 
     @Test func removesASnooze() {
         store.snooze("PR_1", type: .untilActivity, now: NOW)
@@ -201,5 +232,53 @@ private let NOW = d("2026-08-10T12:00:00Z")
             "PR_1": Snooze(prId: "PR_1", type: .untilTime, snoozedAt: NOW, until: d("2026-08-10T15:00:00Z")),
             "PR_2": Snooze(prId: "PR_2", type: .untilActivity, snoozedAt: NOW),
         ])
+    }
+}
+
+/// Read-modify-writes from many threads at once must not lose each other's changes.
+@Suite struct AppStoreConcurrencyTests {
+    let defaults = TestDefaults()
+    private let count = 200
+
+    @Test func keepsEveryRepositoryAddedConcurrently() throws {
+        let store = defaults.makeStore()
+        DispatchQueue.concurrentPerform(iterations: count) { i in
+            try? store.addRepository("acme/repo-\(i)")
+        }
+        #expect(Set(store.settings.repositories) == Set((0..<count).map { "acme/repo-\($0)" }))
+    }
+
+    @Test func keepsEveryUpdateAppliedConcurrently() {
+        let store = defaults.makeStore()
+        DispatchQueue.concurrentPerform(iterations: count) { i in
+            store.updateSettings { $0.repositories.append("acme/repo-\(i)") }
+        }
+        #expect(store.settings.repositories.count == count)
+    }
+
+    @Test func removesEveryRepositoryRemovedConcurrently() throws {
+        let store = defaults.makeStore()
+        store.updateSettings { $0.repositories = (0..<count).map { "acme/repo-\($0)" } }
+        DispatchQueue.concurrentPerform(iterations: count) { i in
+            store.removeRepository("acme/repo-\(i)")
+        }
+        #expect(store.settings.repositories.isEmpty)
+    }
+
+    @Test func keepsEverySnoozeRecordedConcurrently() {
+        let store = defaults.makeStore()
+        DispatchQueue.concurrentPerform(iterations: count) { i in
+            store.snooze("PR_\(i)", type: .untilActivity, now: NOW)
+        }
+        #expect(store.snoozes.count == count)
+    }
+
+    @Test func dropsEverySnoozeRemovedConcurrently() {
+        let store = defaults.makeStore()
+        for i in 0..<count { store.snooze("PR_\(i)", type: .untilActivity, now: NOW) }
+        DispatchQueue.concurrentPerform(iterations: count) { i in
+            store.unsnooze("PR_\(i)")
+        }
+        #expect(store.snoozes.isEmpty)
     }
 }

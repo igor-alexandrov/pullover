@@ -10,7 +10,7 @@ They get the same classified inbox the window shows — which pull requests are 
 
 ## 🔛 Turn it on
 
-The server is off until you say otherwise. A build run straight from source (`swift run`) listens on `7856` instead, so it never fights an installed copy for the port. Open **Settings** in Pullover and turn on **MCP server**. The address appears under the switch; that is the one to give your client.
+The server is off until you say otherwise. A build run straight from source (`swift run`) listens on `7856` instead, so it never fights an installed copy for the port — if that's what you're connecting to, use `7856` wherever the examples below say `7855`. Open **Settings** in Pullover and turn on **MCP server**. The address appears under the switch; that is the one to give your client.
 
 ## 🔌 Connect a client
 

@@ -65,9 +65,19 @@ struct SettingsView: View {
                             }
                         }
                         Divider().padding(.leading, 12)
-                        SettingRow(label: "Start at login", description: "Pullover is a menu-bar app — it opens nothing on screen.") {
+                        SettingRow(
+                            label: "Start at login",
+                            description: "Pullover is a menu-bar app — it opens nothing on screen.",
+                            problem: model.launchAtLogin == .requiresApproval
+                                ? "macOS is waiting for you to allow Pullover in Login Items."
+                                : nil
+                        ) {
+                            if model.launchAtLogin == .requiresApproval {
+                                Button("Open Login Items") { LoginItem.openSystemSettings() }
+                                    .controlSize(.small)
+                            }
                             Toggle("Start at login", isOn: Binding(
-                                get: { model.launchAtLogin },
+                                get: { model.launchAtLogin != .off },
                                 set: { model.setLaunchAtLogin($0) }
                             ))
                             .toggleStyle(.switch)
@@ -238,7 +248,9 @@ struct RepositoriesPane: View {
         let options = repositoryOptions(known: model.snapshot.knownRepositories, selected: settings.repositories)
         let needle = filter.trimmingCharacters(in: .whitespaces).lowercased()
         let visible = needle.isEmpty ? options : options.filter { $0.lowercased().contains(needle) }
-        let selectedCount = options.filter { settings.repositories.contains($0.lowercased()) }.count
+        // Folded like the store folds them: an older build may have saved mixed case.
+        let ticked = Set(settings.repositories.map { $0.lowercased() })
+        let selectedCount = options.filter { ticked.contains($0.lowercased()) }.count
 
         VStack(spacing: 0) {
             PaneHeader(back: "Settings", title: "Repositories") { model.settingsPane = .root }
@@ -285,7 +297,7 @@ struct RepositoriesPane: View {
                                     }
                                     ForEach(visible, id: \.self) { repo in
                                         Toggle(isOn: Binding(
-                                            get: { settings.repositories.contains(repo.lowercased()) },
+                                            get: { ticked.contains(repo.lowercased()) },
                                             set: { model.setRepository(repo, watched: $0) }
                                         )) {
                                             RepositoryName(fullName: repo)

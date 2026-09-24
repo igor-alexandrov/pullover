@@ -8,8 +8,12 @@ public enum ISODate {
         return try? Date(string, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))
     }
 
-    public static func string(_ date: Date) -> String {
-        date.formatted(.iso8601)
+    /// Whole seconds by default, the shape GitHub uses and agents read.
+    /// `fractionalSeconds` keeps milliseconds, for values Pullover reads back itself.
+    public static func string(_ date: Date, fractionalSeconds: Bool = false) -> String {
+        fractionalSeconds
+            ? date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+            : date.formatted(.iso8601)
     }
 
     public static func makeDecoder() -> JSONDecoder {
@@ -25,11 +29,13 @@ public enum ISODate {
         return decoder
     }
 
-    public static func makeEncoder(pretty: Bool = false) -> JSONEncoder {
+    /// `fractionalSeconds` is for persistence: a snooze read back must wake at
+    /// the instant it was set for, not up to a second early.
+    public static func makeEncoder(pretty: Bool = false, fractionalSeconds: Bool = false) -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(string(date))
+            try container.encode(string(date, fractionalSeconds: fractionalSeconds))
         }
         encoder.outputFormatting = pretty ? [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes] : [.sortedKeys, .withoutEscapingSlashes]
         return encoder

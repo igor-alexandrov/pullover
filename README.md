@@ -51,7 +51,7 @@ Pullover is a native macOS app, built with nothing but Apple's own tools: **Swif
 | Updates | `electron-updater` (download + restart) | GitHub Releases check → "New version" button opens the release |
 | Tests | Vitest | Swift Testing |
 
-The package has three targets:
+The app is three targets, each with a test target beside the first two:
 
 - **`PulloverCore`** — the pure rules, ported one-to-one: classification, thread analysis, stacks, snoozes, formatting, the agent view. No I/O, no clock, no AppKit; this is where the unit tests concentrate.
 - **`PulloverKit`** — GitHub (search → details, batching, retries, org-restriction salvage, rate limits), Device Flow, Keychain, the settings store, the `Inbox` engine (one pass at a time, a single queued follow-up), the MCP server and the update check.
@@ -95,6 +95,7 @@ This writes `dist/Pullover.app`, `dist/Pullover-<version>.zip` and `dist/Pullove
 
 - `./scripts/test.sh` — the whole test suite. It is `swift test` plus the search paths Swift Testing needs when only the Command Line Tools are installed.
 - `./scripts/snapshots.sh [dir]` — renders the demo inbox's screens (inbox, dark + compact, settings, repositories) to PNGs offscreen; that is how the pictures above were made.
+- CI (`.github/workflows/ci.yml`) runs the tests and uploads a bundle, built with the `PULLOVER_GITHUB_CLIENT_ID` repository variable — set it, or the uploaded app can't sign in.
 - Logs go to the unified log under the `Pullover` subsystem: `log stream --predicate 'subsystem == "Pullover"'`.
 
 ## 🔐 Privacy

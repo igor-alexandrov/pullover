@@ -36,6 +36,8 @@ public struct PullRequestNode: Decodable, Sendable {
     public struct CommitNode: Decodable, Sendable {
         public struct Commit: Decodable, Sendable {
             public struct Rollup: Decodable, Sendable { public var state: String }
+            /// Optional only so fixtures written before it was fetched still decode.
+            public var oid: String?
             public var committedDate: Date
             public var statusCheckRollup: Rollup?
         }
@@ -64,6 +66,8 @@ public struct PullRequestNode: Decodable, Sendable {
     public var deletions: Int
     public var headRefName: String
     public var baseRefName: String
+    /// Optional only so a payload predating the field still decodes; GitHub always sends it.
+    public var isCrossRepository: Bool?
     public var reviewDecision: String?
     public var mergeable: String
     public var autoMergeRequest: AutoMerge?
@@ -86,10 +90,20 @@ public func mentionsUser(_ text: String, login: String) -> Bool {
     return regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
 }
 
+/// Login GitHub itself shows for an account that no longer exists.
+let deletedUserLogin = "ghost"
+
+/// A deleted account's comment comes back with a null `author` but still took
+/// its turn in the conversation: dropping it would make the comment before it
+/// read as the last word, and lose any mention it made. It stays, as "ghost".
 private func flatten(_ nodes: [PullRequestNode.CommentNode?]) -> [ThreadComment] {
     nodes.compactMap { node in
-        guard let node, let author = node.author else { return nil }
-        return ThreadComment(authorLogin: author.login, createdAt: node.createdAt, bodyText: node.bodyText)
+        guard let node else { return nil }
+        return ThreadComment(
+            authorLogin: node.author?.login ?? deletedUserLogin,
+            createdAt: node.createdAt,
+            bodyText: node.bodyText
+        )
     }
 }
 
@@ -165,7 +179,7 @@ public func mapPullRequest(_ node: PullRequestNode, buckets: [SearchBucket], myL
         title: node.title,
         url: node.url,
         repository: node.repository.nameWithOwner,
-        authorLogin: node.author?.login ?? "ghost",
+        authorLogin: node.author?.login ?? deletedUserLogin,
         authorAvatarURL: node.author?.avatarUrl ?? "",
         createdAt: node.createdAt,
         updatedAt: node.updatedAt,
@@ -174,8 +188,10 @@ public func mapPullRequest(_ node: PullRequestNode, buckets: [SearchBucket], myL
         deletions: node.deletions,
         headRefName: node.headRefName,
         baseRefName: node.baseRefName,
+        isCrossRepository: node.isCrossRepository ?? false,
         ciStatus: mapCIStatus(lastCommit?.statusCheckRollup?.state),
         lastCommitPushedAt: lastCommit?.committedDate ?? node.createdAt,
+        headSHA: lastCommit?.oid,
         reviewDecision: node.reviewDecision.flatMap(ReviewDecision.init(rawValue:)),
         mergeable: MergeableState(rawValue: node.mergeable) ?? .unknown,
         hasAutoMerge: node.autoMergeRequest != nil,

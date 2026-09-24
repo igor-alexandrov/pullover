@@ -44,7 +44,13 @@ final class AppModel {
     var showSettings = false
     var settingsPane = SettingsPane.root
     var collapsed: Set<Category> = [.waiting]
-    private(set) var selectedID: String?
+    private(set) var selectedID: String? {
+        didSet {
+            if let index = visibleItems.firstIndex(where: { $0.id == selectedID }) { selectedIndexHint = index }
+        }
+    }
+    /// Where the cursor last sat, so it can stay in place when its row leaves.
+    @ObservationIgnored private var selectedIndexHint = 0
     /// Bumped on a deliberate move — keys, a click — so the list scrolls to it.
     /// A hover moves the selection quietly and must not scroll under the pointer.
     private(set) var scrollRequest = 0
@@ -53,7 +59,9 @@ final class AppModel {
     private(set) var now = Date()
     private(set) var signIn = SignInState.idle
     private(set) var signInError: String?
-    private(set) var launchAtLogin = LoginItem.isEnabled
+    /// Set when sign-out could not remove the token from the Keychain.
+    private(set) var signOutError: String?
+    private(set) var launchAtLogin = LoginItem.status
     private(set) var shortcutActive = true
     private(set) var mcpStatus = MCPServerStatus.stopped
     var repositoryError: String?
@@ -119,7 +127,7 @@ final class AppModel {
 
     func popupWillOpen() {
         now = Date()
-        launchAtLogin = LoginItem.isEnabled
+        launchAtLogin = LoginItem.status
         shortcutActive = hotKey.isActive
         // Opening onto a stale list is the one moment worth spending a fetch on.
         if client != nil, inbox.snapshot.shouldRefreshOnOpen(now: now) {
@@ -158,6 +166,7 @@ final class AppModel {
 
     func toggleSection(_ category: Category) {
         if collapsed.contains(category) { collapsed.remove(category) } else { collapsed.insert(category) }
+        ensureSelection()
     }
 
     // MARK: - Selection
@@ -171,10 +180,15 @@ final class AppModel {
         scrollRequest += 1
     }
 
-    /// Puts the cursor on the first row as soon as there is one, so the keys
-    /// work the moment the popup opens.
+    /// Keeps the cursor on a row that is shown: the first one as soon as there
+    /// is one, so the keys work the moment the popup opens, and the row now in
+    /// its place when its own row leaves — snoozed into a collapsed section, or
+    /// collapsed itself. The keys act on the cursor, so it must never sit on a
+    /// hidden row.
     func ensureSelection() {
-        if selectedID == nil { selectedID = visibleItems.first?.id }
+        let items = visibleItems
+        guard !items.contains(where: { $0.id == selectedID }) else { return }
+        selectedID = selectedID == nil || items.isEmpty ? items.first?.id : items[min(selectedIndexHint, items.count - 1)].id
     }
 
     func moveSelection(by delta: Int) {
@@ -221,7 +235,7 @@ final class AppModel {
     }
 
     func snooze(_ item: ClassifiedPullRequest, type: SnoozeType, hours: Int? = nil) {
-        store.snooze(item.pr.id, type: type, now: Date(), hours: hours)
+        store.snooze(item.pr.id, type: type, now: Date(), hours: hours, headSHA: item.pr.headSHA)
         inbox.reclassify()
         showToast(for: item)
     }
@@ -356,6 +370,7 @@ final class AppModel {
                 let token = try await flow.pollForToken(code)
                 try tokenStore.save(token)
                 client = URLSessionGraphQLClient(token: token)
+                inbox.sessionDidChange()
                 inbox.start()
             } catch is CancellationError {
                 return
@@ -367,8 +382,16 @@ final class AppModel {
 
     func signOut() {
         signInTask?.cancel()
-        tokenStore.clear()
+        // Signed out of this run either way; a failed delete is reported
+        // because the token would load again at the next launch.
+        do {
+            try tokenStore.clear()
+            signOutError = nil
+        } catch {
+            signOutError = error.localizedDescription
+        }
         client = nil
+        inbox.sessionDidChange()
         inbox.stop()
         showSettings = false
         settingsPane = .root

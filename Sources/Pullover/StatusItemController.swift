@@ -162,7 +162,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
                 menu.addItem(ClosureMenuItem(label) { [weak self] in self?.model.perform(action, on: item) })
             }
         }
-        let frame = RowFrames.shared.frames[item.id] ?? .zero
+        // A row the lazy list hasn't laid out has no frame; hang the menu under
+        // the header instead of in a corner.
+        let frame = RowFrames.shared.frames[item.id] ?? CGRect(x: 0, y: 52, width: 0, height: 0)
         // SwiftUI's global space is the hosting view's, which is flipped.
         let point = view.isFlipped
             ? NSPoint(x: frame.minX + 16, y: frame.maxY)

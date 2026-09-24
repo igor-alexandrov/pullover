@@ -20,7 +20,12 @@ public func computeStackPositions(_ prs: [PullRequest]) -> [String: StackPositio
         // on it, so a PR can get two parents (a shared `headRefName`) or two
         // children (a fork). The ambiguity is caught below by disqualifying the
         // whole connected component rather than guessed around.
-        let headIndex = Dictionary(grouping: repoPRs, by: \.headRefName)
+        //
+        // A PR from a fork is left out of the index: its `headRefName` names a
+        // branch of the fork (often its `main`), not of this repository, so it
+        // can't be what another PR here is based on. It can still be a child,
+        // since its base branch does live here.
+        let headIndex = Dictionary(grouping: repoPRs.filter { !$0.isCrossRepository }, by: \.headRefName)
         var parentsOf: [String: [String]] = [:]
         var childrenOf: [String: [String]] = [:]
         for pr in repoPRs {

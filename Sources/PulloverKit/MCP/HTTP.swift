@@ -58,6 +58,7 @@ public struct HTTPResponse: Sendable, Equatable {
         case 404: "Not Found"
         case 405: "Method Not Allowed"
         case 413: "Content Too Large"
+        case 503: "Service Unavailable"
         default: "Internal Server Error"
         }
     }
@@ -74,13 +75,20 @@ enum HTTPParseResult: Equatable {
 /// never comes near it; anything bigger is not a client of this server.
 let maxRequestBody = 1 << 20
 
+/// The largest request head accepted: the request line and headers, without
+/// the blank line that ends them.
+let maxRequestHead = 64 * 1024
+
 /// Parses one HTTP/1.1 request from the start of `buffer`. Only what a local
 /// MCP client sends is understood: a request line, headers, and a body sized
 /// by `Content-Length`. Chunked uploads are refused.
 func parseHTTPRequest(_ buffer: Data) -> HTTPParseResult {
     guard let headerEnd = buffer.firstRange(of: Data("\r\n\r\n".utf8)) else {
-        return buffer.count > 64 * 1024 ? .tooLarge : .incomplete
+        return buffer.count > maxRequestHead ? .tooLarge : .incomplete
     }
+    // An oversized head can arrive whole, in one read or across several, so
+    // having found its end says nothing about its size.
+    guard headerEnd.lowerBound - buffer.startIndex <= maxRequestHead else { return .tooLarge }
     guard let head = String(data: buffer[buffer.startIndex..<headerEnd.lowerBound], encoding: .utf8) else {
         return .invalid("Request head is not UTF-8")
     }

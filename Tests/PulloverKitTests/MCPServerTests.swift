@@ -130,6 +130,27 @@ private func json(_ response: HTTPResponse) -> JSONValue? {
         #expect(await respond(post(body: notifications)).status == 202)
     }
 
+    @Test func echoesARequestIdAbove2To53Exactly() async {
+        // 2^53 + 1, which a Double rounds to 2^53.
+        let body = Data(#"{"jsonrpc":"2.0","id":9007199254740993,"method":"ping"}"#.utf8)
+        let response = await respond(post(body: body))
+        #expect(String(decoding: response.body, as: UTF8.self).contains(#""id":9007199254740993"#))
+        #expect(json(response)?["id"]?.integerValue == 9_007_199_254_740_993)
+    }
+
+    @Test func callsNoHandlerOnceTheConnectionIsClosed() async {
+        let calls = Counter()
+        let counting: MCPServer.Handler = { message in
+            calls.increment()
+            return await echo(message)
+        }
+        let response = await MCPServer.respond(to: post(), port: port, handler: counting, isOpen: { false })
+        #expect(response.status == 503)
+        let batch = Data(#"[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","id":2,"method":"ping"}]"#.utf8)
+        #expect(await MCPServer.respond(to: post(body: batch), port: port, handler: counting, isOpen: { false }).status == 503)
+        #expect(calls.count == 0)
+    }
+
     @Test func serialisesAResponseWithItsLengthAndClosesTheConnection() {
         let text = String(decoding: HTTPResponse(status: 202).serialized(), as: UTF8.self)
         #expect(text.hasPrefix("HTTP/1.1 202 Accepted\r\n"))
@@ -204,6 +225,21 @@ private func json(_ response: HTTPResponse) -> JSONValue? {
         #expect(parseHTTPRequest(Data(repeating: UInt8(ascii: "a"), count: 64 * 1024 + 1)) == .tooLarge)
     }
 
+    @Test func refusesAHeadOverTheLimitEvenOnceItHasEnded() {
+        let big = "POST /mcp HTTP/1.1\r\nX-Big: \(String(repeating: "a", count: maxRequestHead))\r\n\r\n"
+        #expect(parseHTTPRequest(raw(big)) == .tooLarge)
+    }
+
+    @Test func acceptsAHeadExactlyAtTheLimit() {
+        let prefix = "GET / HTTP/1.1\r\nX: "
+        let head = prefix + String(repeating: "a", count: maxRequestHead - prefix.utf8.count)
+        #expect(head.utf8.count == maxRequestHead)
+        guard case .complete = parseHTTPRequest(raw(head + "\r\n\r\n")) else {
+            Issue.record("expected a complete request")
+            return
+        }
+    }
+
     @Test func readsThePathWithoutTheQuery() {
         #expect(HTTPRequest(method: "POST", target: "/mcp?x=1").path == "/mcp")
     }
@@ -240,6 +276,89 @@ private func closedAfterSending(_ text: String, to port: Int) async -> Bool {
         }
         drain()
     }
+}
+
+@Suite struct JSONValueNumberTests {
+    private func roundTrip(_ text: String) throws -> String {
+        let value = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
+        return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+    }
+
+    @Test func keepsIntegersBeyondADoublesPrecisionExactly() throws {
+        #expect(try roundTrip("9007199254740993") == "9007199254740993")
+        #expect(try roundTrip("9223372036854775807") == "9223372036854775807")
+        #expect(try roundTrip("-9223372036854775808") == "-9223372036854775808")
+        #expect(try JSONDecoder().decode(JSONValue.self, from: Data("9007199254740993".utf8)) == .integer(9_007_199_254_740_993))
+    }
+
+    @Test func keepsFractionsAndHugeNumbersAsDoubles() throws {
+        #expect(try JSONDecoder().decode(JSONValue.self, from: Data("2.5".utf8)) == .number(2.5))
+        let huge = try JSONDecoder().decode(JSONValue.self, from: Data("1e20".utf8))
+        #expect(huge.numberValue == 1e20)
+        #expect(huge.integerValue == nil)
+    }
+
+    @Test func comparesAndHashesTheTwoNumberCasesByValue() {
+        #expect(JSONValue.integer(4) == .number(4))
+        #expect(JSONValue.number(4) == .integer(4))
+        #expect(JSONValue.integer(4) != .number(4.5))
+        #expect(Set<JSONValue>([.integer(4), .number(4)]).count == 1)
+        #expect(JSONValue.integer(9_007_199_254_740_993) != .number(9_007_199_254_740_992))
+    }
+
+    @Test func offersBothAnExactIntegerAndADouble() {
+        #expect(JSONValue.integer(7).numberValue == 7)
+        #expect(JSONValue.number(7).integerValue == 7)
+        #expect(JSONValue.number(7.5).integerValue == nil)
+        #expect(JSONValue.number(.infinity).integerValue == nil)
+        #expect(JSONValue.number(.nan).integerValue == nil)
+        #expect(JSONValue.string("7").integerValue == nil)
+    }
+}
+
+/// A raw TCP client, for a request sent in pieces.
+private final class RawClient: @unchecked Sendable {
+    let connection: NWConnection
+
+    init(port: Int) {
+        connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: UInt16(port))!, using: .tcp)
+        connection.start(queue: DispatchQueue(label: "PulloverKitTests.rawClient"))
+    }
+
+    deinit { connection.cancel() }
+
+    func send(_ text: String) {
+        connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in })
+    }
+
+    /// Everything the server sent, once it has closed the connection.
+    func untilClosed() async -> Data {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            let received = Box(Data())
+            @Sendable func drain() {
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
+                    if let data { received.value.append(data) }
+                    if isComplete || error != nil {
+                        continuation.resume(returning: received.value)
+                    } else {
+                        drain()
+                    }
+                }
+            }
+            drain()
+        }
+    }
+}
+
+/// Polls `condition` on the main actor until it holds, for at most five seconds.
+@MainActor
+private func eventually(_ condition: () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + .seconds(5)
+    while !condition() {
+        if ContinuousClock.now > deadline { return false }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return true
 }
 
 @MainActor
@@ -303,13 +422,61 @@ struct MCPServerLifecycleTests {
 
     @Test func leavesNothingListeningWhenAStopLandsDuringABind() async {
         let server = makeServer()
-        let starting = Task { await server.start(port: 0) }
-        // Let `start` reach its wait for the listener, then stop underneath it,
-        // as a double-click on the settings switch does.
-        await Task.yield()
-        server.stop()
-        await starting.value
+        var stoppedDuringBind = false
+        // Stop underneath `start` the moment it waits for its listener, before
+        // that listener can report anything, as a double-click on the settings
+        // switch does.
+        server.didBeginBinding = { [unowned server] in
+            server.stop()
+            stoppedDuringBind = true
+        }
+        await server.start(port: 0)
+        #expect(stoppedDuringBind)
         #expect(server.status == .stopped)
+
+        // And the listener it abandoned lets a later start bind.
+        server.didBeginBinding = nil
+        await server.start(port: 0)
+        #expect(server.status.listening)
+        server.stop()
+    }
+
+    @Test(arguments: [-1, 65536, 70000, Int.min])
+    func refusesAPortOutsideTheTCPRangeRatherThanBindingAnotherOne(bad: Int) async throws {
+        let (server, running) = try await listening()
+        defer { server.stop() }
+
+        await server.start(port: bad)
+        #expect(server.status.listening == false)
+        #expect(server.status.port == nil)
+        #expect(server.status.error?.contains("not a TCP port") == true)
+        // The listener it replaced is gone too, so nothing serves a port nobody asked for.
+        await #expect(throws: (any Error).self) { _ = try await send(ping, to: running) }
+    }
+
+    @Test func closesTheConnectionsItAcceptedWhenStopped() async throws {
+        let calls = Counter()
+        let server = MCPServer { message in
+            calls.increment()
+            return await echo(message)
+        }
+        await server.start(port: 0)
+        defer { server.stop() }
+        let port = try #require(server.status.port)
+
+        let body = String(decoding: ping, as: UTF8.self)
+        let client = RawClient(port: port)
+        client.send("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Length: \(ping.count)\r\n\r\n")
+        #expect(await eventually { server.openConnectionCount == 1 })
+
+        server.stop()
+        #expect(server.openConnectionCount == 0)
+        // The rest of the request, which the Node server would never have seen.
+        client.send(body)
+        let answer = await client.untilClosed()
+
+        #expect(answer.isEmpty)
+        #expect(calls.count == 0)
     }
 
     @Test func doesNotReportAConflictAgainstAListenerOfItsOwn() async throws {

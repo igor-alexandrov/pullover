@@ -49,6 +49,13 @@ struct SignInView: View {
                 }
             }
 
+            // Signed out in the app, but the token may still be in the Keychain
+            // and would sign the next launch back in.
+            if let error = model.signOutError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             if let error = model.signInError {
                 Text(error)
                     .font(.caption)

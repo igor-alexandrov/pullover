@@ -37,6 +37,10 @@ public final class Inbox {
     /// When a hit rate limit lifts. Refreshes are skipped until then.
     @ObservationIgnored private var rateLimitedUntil: Date?
     @ObservationIgnored private var poller: Task<Void, Never>?
+    /// Bumped whenever the credentials change. A pass applies its result, its
+    /// error or `onAuthError` only while this still matches the value it
+    /// started with, so a pass begun under one account never touches the next.
+    @ObservationIgnored private var session = 0
 
     public init(
         store: AppStore,
@@ -117,10 +121,22 @@ public final class Inbox {
         await (queued ?? inFlight)?.value
     }
 
+    /// The owner calls this whenever the credentials change — sign-out, or a
+    /// sign-in as whoever. It forgets the previous account's identity and list
+    /// and disowns any pass still in flight, so a late result or a stale 401
+    /// from the old token cannot land on the new account.
+    public func sessionDidChange() {
+        session += 1
+        myLogin = nil
+        prs = []
+        rateLimitedUntil = nil
+    }
+
     /// Starts a pass, or queues the one follow-up, without waiting for it.
     /// Synchronous, so the snapshot says `loading` by the time it returns.
+    /// Internal rather than private so tests can make a request at an exact moment.
     @discardableResult
-    private func requestPass() -> Task<Void, Never> {
+    func requestPass() -> Task<Void, Never> {
         // Not started yet, so it begins after this call: joining it is enough.
         // Checked before `inFlight`, which is already nil in the moment between
         // the pass ahead finishing and this one starting.
@@ -141,8 +157,9 @@ public final class Inbox {
         passCount += 1
         let id = passCount
         let client = beginPass()
+        let session = self.session
         let pass = Task {
-            if let client { await self.fetchAndApply(client) }
+            if let client { await self.fetchAndApply(client, session: session) }
             // A later pass may have taken over the slot; that one clears its own.
             if self.passCount == id { self.inFlight = nil }
         }
@@ -174,18 +191,21 @@ public final class Inbox {
         return client
     }
 
-    private func fetchAndApply(_ client: any GraphQLClient) async {
+    private func fetchAndApply(_ client: any GraphQLClient, session: Int) async {
+        // The credentials changed while this pass was waiting on the network:
+        // its result, or its error, belongs to an account that is gone.
+        var isCurrent: Bool { session == self.session && clientProvider() != nil }
         do {
             let login: String
             if let myLogin {
                 login = myLogin
             } else {
                 login = try await fetchLogin(client)
+                guard isCurrent else { return }
                 myLogin = login
             }
             let fetched = try await fetchPRs(client, login)
-            // Signed out while the fetch was in flight: its result belongs to nobody.
-            guard clientProvider() != nil else { return }
+            guard isCurrent else { return }
             prs = fetched.prs
 
             let fetchedAt = now()
@@ -201,6 +221,7 @@ public final class Inbox {
                 $0.knownRepositories = collectRepositories(fetched.prs)
             }
         } catch {
+            guard isCurrent else { return }
             let resetAt = rateLimitResetAt(error, now: now())
             rateLimitedUntil = resetAt
             // Keep the last good list on screen; the header shows its age.
@@ -221,7 +242,9 @@ public final class Inbox {
     public func start() {
         stop()
         requestPass()
-        let interval = Duration.seconds(max(1, store.settings.pollIntervalMinutes) * 60)
+        // Settings decoding already bounds this; clamp anyway so no value can overflow.
+        let minutes = min(max(1, store.settings.pollIntervalMinutes), Settings.pollIntervalRange.upperBound)
+        let interval = Duration.seconds(minutes * 60)
         poller = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)

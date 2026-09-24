@@ -5,14 +5,22 @@ import Security
 public protocol TokenStore: Sendable {
     func load() -> String?
     func save(_ token: String) throws
-    func clear()
+    /// Throws when the token may still be stored, so a failed sign-out is not
+    /// mistaken for one that worked. Clearing an empty store succeeds.
+    func clear() throws
 }
 
 public struct KeychainError: Error, LocalizedError {
+    public enum Operation: Sendable { case save, delete }
+
     public var status: OSStatus
+    public var operation: Operation = .save
     public var errorDescription: String? {
         let detail = SecCopyErrorMessageString(status, nil).map { $0 as String } ?? "OSStatus \(status)"
-        return "Couldn't save the token to the Keychain: \(detail)"
+        switch operation {
+        case .save: return "Couldn't save the token to the Keychain: \(detail)"
+        case .delete: return "Couldn't remove the token from the Keychain: \(detail)"
+        }
     }
 }
 
@@ -63,8 +71,11 @@ public struct KeychainTokenStore: TokenStore {
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 
-    public func clear() {
-        SecItemDelete(query as CFDictionary)
+    public func clear() throws {
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError(status: status, operation: .delete)
+        }
     }
 }
 
@@ -77,5 +88,5 @@ public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
 
     public func load() -> String? { lock.withLock { token } }
     public func save(_ token: String) throws { lock.withLock { self.token = token } }
-    public func clear() { lock.withLock { token = nil } }
+    public func clear() throws { lock.withLock { token = nil } }
 }

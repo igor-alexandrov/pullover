@@ -249,8 +249,12 @@ final class FakeGraphQLClient: GraphQLClient, @unchecked Sendable {
     }
 }
 
+/// Sorted keys, so encoding the same value twice gives the same bytes — errors
+/// carrying encoded data compare equal only then.
 func encode(_ value: JSONValue) throws -> Data {
-    try JSONEncoder().encode(value)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    return try encoder.encode(value)
 }
 
 func decodeJSON(_ data: Data?) -> JSONValue? {

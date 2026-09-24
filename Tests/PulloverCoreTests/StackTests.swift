@@ -1,12 +1,19 @@
 import Testing
 @testable import PulloverCore
 
-private func pr(_ id: String, head: String, base: String, repository: String = "acme/web") -> PullRequest {
+private func pr(
+    _ id: String,
+    head: String,
+    base: String,
+    repository: String = "acme/web",
+    fromFork: Bool = false
+) -> PullRequest {
     makePullRequest {
         $0.id = id
         $0.headRefName = head
         $0.baseRefName = base
         $0.repository = repository
+        $0.isCrossRepository = fromFork
     }
 }
 
@@ -53,6 +60,38 @@ private func pos(_ id: String, _ index: Int, _ total: Int) -> StackPosition {
             #expect(positions["PR_645"] == pos("PR_641", 7, 8))
             #expect(positions["PR_650"] == pos("PR_641", 8, 8))
             #expect(positions["PR_999"] == nil)
+        }
+
+        @Test("never makes a fork's PR the parent of PRs based on a same-named branch here") func forkHeadIsNotAParent() {
+            // A contributor opened a PR from their fork's `main`; that branch is
+            // not this repository's `main`, which PR_2 is based on.
+            let prs = [
+                pr("PR_fork", head: "main", base: "develop", fromFork: true),
+                pr("PR_2", head: "feature-x", base: "main"),
+            ]
+            #expect(computeStackPositions(prs).isEmpty)
+        }
+
+        @Test("does not let a fork's PR fork an otherwise simple chain") func forkHeadDoesNotPoisonChain() {
+            let prs = [
+                pr("PR_1", head: "part-1", base: "main"),
+                pr("PR_2", head: "part-2", base: "part-1"),
+                pr("PR_fork", head: "part-1", base: "main", fromFork: true),
+            ]
+            let positions = computeStackPositions(prs)
+            #expect(positions["PR_1"] == pos("PR_1", 1, 2))
+            #expect(positions["PR_2"] == pos("PR_1", 2, 2))
+            #expect(positions["PR_fork"] == nil)
+        }
+
+        @Test("still stacks a fork's PR on top of a branch that lives here") func forkPRCanBeAChild() {
+            let prs = [
+                pr("PR_1", head: "part-1", base: "main"),
+                pr("PR_fork", head: "main", base: "part-1", fromFork: true),
+            ]
+            let positions = computeStackPositions(prs)
+            #expect(positions["PR_1"] == pos("PR_1", 1, 2))
+            #expect(positions["PR_fork"] == pos("PR_1", 2, 2))
         }
 
         @Test("gives no position to a lone pull request (chain of one)") func lone() {

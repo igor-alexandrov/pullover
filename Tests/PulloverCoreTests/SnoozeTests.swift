@@ -46,6 +46,36 @@ private let now = d("2026-08-10T12:00:00Z")
             #expect(!isSnoozeActive(pr, snooze, myLogin: me, now: now))
         }
 
+        @Test("wakes on a push whose commit is dated before the snooze") func wakesOnBackdatedPush() {
+            // A rebase or cherry-pick keeps the commit's original date.
+            var recorded = snooze
+            recorded.headSHA = "aaa111"
+            let pr = makePullRequest {
+                $0.headSHA = "bbb222"
+                $0.lastCommitPushedAt = d("2026-08-09T10:00:00Z")
+            }
+            #expect(!isSnoozeActive(pr, recorded, myLogin: me, now: now))
+        }
+
+        @Test("stays asleep while the head is the one it was snoozed on") func sameHead() {
+            var recorded = snooze
+            recorded.headSHA = "aaa111"
+            let pr = makePullRequest {
+                $0.headSHA = "aaa111"
+                // Only possible with a clock-skewed committer; the SHA settles it.
+                $0.lastCommitPushedAt = d("2026-08-10T11:00:00Z")
+            }
+            #expect(isSnoozeActive(pr, recorded, myLogin: me, now: now))
+        }
+
+        @Test("falls back to the commit date for a snooze saved without a head") func legacySnooze() {
+            let pr = makePullRequest {
+                $0.headSHA = "bbb222"
+                $0.lastCommitPushedAt = d("2026-08-09T10:00:00Z")
+            }
+            #expect(isSnoozeActive(pr, snooze, myLogin: me, now: now))
+        }
+
         @Test("stays asleep when the only new comment is my own") func ownComment() {
             let pr = makePullRequest {
                 $0.lastCommitPushedAt = d("2026-08-09T10:00:00Z")

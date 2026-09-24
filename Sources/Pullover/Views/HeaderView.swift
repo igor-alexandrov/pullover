@@ -20,7 +20,7 @@ struct HeaderView: View {
             }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(snapshot.attentionCount > 0 ? "waiting on you" : "All clear")
+                Text(headline(snapshot))
                     .font(.system(size: 13, weight: .semibold))
                 Text(headerStatusText(snapshot, now: model.now))
                     .font(.caption)
@@ -57,6 +57,15 @@ struct HeaderView: View {
         .frame(height: 52)
         .background(Metrics.raised)
     }
+}
+
+/// "All clear" only when the list can be trusted to be complete: a zero after
+/// a failed fetch, or with an organization's pull requests missing, is not one.
+private func headline(_ snapshot: InboxSnapshot) -> String {
+    if snapshot.attentionCount > 0 { return "waiting on you" }
+    if snapshot.status == .error { return "Couldn't refresh" }
+    if snapshot.errorMessage != nil { return "Nothing visible waiting" }
+    return "All clear"
 }
 
 struct HeaderIconButton: View {

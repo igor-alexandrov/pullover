@@ -103,24 +103,36 @@ public func describeError(_ error: any Error) -> String {
 
 // MARK: - OAuth App access restrictions
 
-private let restrictionPattern = "the `([^`]+)` organization has enabled OAuth App access restrictions"
+/// The org GitHub names in a restriction message: "the `acme` organization".
+private let restrictionOrgPattern = "`([^`]+)`\\s+organization"
 
-private func restrictionRegex() -> NSRegularExpression {
+/// Phrases a restriction message carries besides the org, any one of which will
+/// do. Loose on purpose: an org named in some other error ("the `acme`
+/// organization could not be found") must not read as a restriction, but a
+/// reworded restriction still should.
+private let restrictionMarkers = ["access restriction", "third-part"]
+
+private func restrictionOrgRegex() -> NSRegularExpression {
     // A constant pattern; it cannot fail to compile.
-    try! NSRegularExpression(pattern: restrictionPattern, options: [.caseInsensitive])
+    try! NSRegularExpression(pattern: restrictionOrgPattern, options: [.caseInsensitive])
+}
+
+/// Orgs one error entry reports as restricting the OAuth app, or none when the
+/// entry is about something else. Judged per entry, so a restriction marker in
+/// one message never lends itself to an org named in another.
+private func restrictedOrganizations(inEntry text: String) -> [String] {
+    guard restrictionMarkers.contains(where: { text.range(of: $0, options: .caseInsensitive) != nil }) else {
+        return []
+    }
+    return restrictionOrgRegex().matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+        Range(match.range(at: 1), in: text).map { String(text[$0]) }
+    }
 }
 
 /// Orgs GitHub named in an OAuth-app restriction error, sorted for stable copy.
 public func restrictedOrganizations(_ error: any Error) -> [String] {
     guard let gh = error as? GitHubError else { return [] }
-    let regex = restrictionRegex()
-    var orgs = Set<String>()
-    for text in gh.messages {
-        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            if let range = Range(match.range(at: 1), in: text) { orgs.insert(String(text[range])) }
-        }
-    }
-    return orgs.sorted()
+    return Array(Set(gh.messages.flatMap(restrictedOrganizations(inEntry:)))).sorted()
 }
 
 /// Whether a restriction is the *only* thing that went wrong. GitHub can report
@@ -128,11 +140,8 @@ public func restrictedOrganizations(_ error: any Error) -> [String] {
 /// dropping such a bucket for "one org is restricted" would hide a real failure.
 public func isOnlyRestriction(_ error: any Error) -> Bool {
     guard let gh = error as? GitHubError else { return false }
-    guard case let .graphql(messages, _) = gh else { return !restrictedOrganizations(gh).isEmpty }
-    let regex = restrictionRegex()
-    return !messages.isEmpty && messages.allSatisfy {
-        regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil
-    }
+    let messages = gh.messages
+    return !messages.isEmpty && messages.allSatisfy { !restrictedOrganizations(inEntry: $0).isEmpty }
 }
 
 /// The `data` a GraphQL error response still carried.

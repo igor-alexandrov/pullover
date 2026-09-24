@@ -41,6 +41,9 @@ struct PullRequestRow: View {
                 Color.clear
                     .onAppear { RowFrames.shared.frames[item.id] = geometry.frame(in: .global) }
                     .onChange(of: geometry.frame(in: .global)) { _, frame in RowFrames.shared.frames[item.id] = frame }
+                    // A row scrolled out of the lazy list keeps no stale position
+                    // for a menu to hang off.
+                    .onDisappear { RowFrames.shared.frames[item.id] = nil }
             }
         }
         .accessibilityElement(children: .combine)
@@ -226,9 +229,9 @@ struct AvatarView: View {
     var size: CGFloat
 
     var body: some View {
-        AsyncImage(url: sizedURL) { phase in
-            if let image = phase.image {
-                image.resizable().scaledToFill()
+        ZStack {
+            if let image = sizedURL.flatMap({ AvatarCache.shared.image(for: $0) }) {
+                Image(nsImage: image).resizable().scaledToFill()
             } else {
                 ZStack {
                     Accent.primary.tint

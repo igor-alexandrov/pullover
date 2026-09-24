@@ -12,7 +12,11 @@ jobs:
       - uses: actions/checkout@v4
       - run: swift --version
       - run: ./scripts/test.sh
+      # The client ID is public (Device Flow has no secret), so a repository
+      # variable is enough; without it the build can't sign anyone in.
       - run: ./scripts/bundle.sh
+        env:
+          PULLOVER_GITHUB_CLIENT_ID: ${{ vars.PULLOVER_GITHUB_CLIENT_ID }}
       - uses: actions/upload-artifact@v4
         with:
           name: Pullover

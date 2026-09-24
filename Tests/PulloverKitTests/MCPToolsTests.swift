@@ -42,7 +42,7 @@ struct ToolAnswer {
     var sections: [JSONValue] { structured?["sections"]?.arrayValue ?? [] }
     var categories: [String] { sections.compactMap { $0["category"]?.stringValue } }
     var numbers: [Int] {
-        sections.flatMap { $0["pullRequests"]?.arrayValue ?? [] }.compactMap { $0["number"]?.numberValue.map { Int($0) } }
+        sections.flatMap { $0["pullRequests"]?.arrayValue ?? [] }.compactMap { $0["number"]?.integerValue.map { Int($0) } }
     }
 }
 
@@ -394,6 +394,11 @@ struct MCPSnoozeToolTests {
         .number(100_000),
         .number(-3),
         .string("4"),
+        .number(1e20),
+        .number(-1e20),
+        .number(.infinity),
+        .number(.nan),
+        .integer(.max),
     ])
     func refusesAParkLengthThatIsNotAWholeNumberOfHoursFrom1To336(hours: JSONValue) async {
         let h = await MCPHarness()
@@ -408,6 +413,12 @@ struct MCPSnoozeToolTests {
         ["repository": "acme/web"],
         ["repository": "acme/web", "number": 0],
         ["repository": "acme/web", "number": .number(1.5)],
+        // Whole numbers that `Int(_:)` would trap on.
+        ["repository": "acme/web", "number": .number(1e20)],
+        ["repository": "acme/web", "number": .number(-1e20)],
+        ["repository": "acme/web", "number": .number(.infinity)],
+        ["repository": "acme/web", "number": .number(.nan)],
+        ["repository": "acme/web", "number": .integer(-1)],
     ])
     func refusesAMissingOrMalformedIdentifier(arguments: [String: JSONValue]) async {
         let h = await MCPHarness()
@@ -415,6 +426,26 @@ struct MCPSnoozeToolTests {
         #expect(answer.isError)
         #expect(answer.text.hasPrefix("Invalid arguments"))
         #expect(h.store.snoozes.isEmpty)
+    }
+
+    @Test func refusesHugeNumbersSentAsJSONInsteadOfCrashing() async throws {
+        let h = await MCPHarness()
+        for arguments in [#"{"repository":"acme/web","number":1e20}"#, #"{"repository":"acme/web","number":1,"hours":1e20}"#] {
+            let message = try JSONDecoder().decode(JSONValue.self, from: Data(
+                #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"snooze_pull_request","arguments":\#(arguments)}}"#.utf8
+            ))
+            let answer = ToolAnswer(await h.tools.handle(message))
+            #expect(answer.isError)
+            #expect(answer.text.hasPrefix("Invalid arguments"))
+        }
+        #expect(h.store.snoozes.isEmpty)
+    }
+
+    @Test func takesAWholeNumberOfHoursWrittenAsADouble() async {
+        let h = await MCPHarness()
+        let answer = await h.call("snooze_pull_request", ["repository": "acme/web", "number": .number(1), "hours": .number(4)])
+        #expect(!answer.isError)
+        #expect(h.store.snoozes["PR_1"]?.until == d("2026-08-10T16:00:00Z"))
     }
 
     @Test func saysItIsSignedOutRatherThanSendingTheAgentToAnEmptyInbox() async {

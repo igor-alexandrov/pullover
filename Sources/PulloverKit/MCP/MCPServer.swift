@@ -38,7 +38,7 @@ public func refusal(for headers: [String: String], port: Int) -> String? {
 }
 
 func rpcError(_ message: String, code: Int = -32000, id: JSONValue = .null) -> JSONValue {
-    ["jsonrpc": "2.0", "error": ["code": .number(Double(code)), "message": .string(message)], "id": id]
+    ["jsonrpc": "2.0", "error": ["code": .integer(Int64(code)), "message": .string(message)], "id": id]
 }
 
 /// Serves MCP over Streamable HTTP on the loopback interface. Stateless: every
@@ -52,6 +52,8 @@ public final class MCPServer {
     private let idleTimeout: TimeInterval
     private let queue = DispatchQueue(label: "Pullover.mcp")
     private var listener: NWListener?
+    /// The connections the current listener accepted, which `stop` closes.
+    private var connections: ConnectionRegistry?
     /// The `start` waiting for its listener to settle, which `stop` must release.
     private var pendingStart: ResumeOnce?
     /// Finishes once the last listener `stop` cancelled has let go of its port.
@@ -63,6 +65,11 @@ public final class MCPServer {
     }
     /// Called on every change of `status`, including a listener failing long after it started.
     public var onStatusChange: ((MCPServerStatus) -> Void)?
+    /// Tests only: called once `start` has started its listener and is
+    /// waiting for it to settle, before any state of that listener is handled.
+    var didBeginBinding: (() -> Void)?
+    /// Tests only: how many accepted connections are still open.
+    var openConnectionCount: Int { connections?.count ?? 0 }
 
     /// `handleMessage` answers one JSON-RPC message, or returns nil for a
     /// notification. A connection that has not sent a whole request within
@@ -76,6 +83,12 @@ public final class MCPServer {
     /// reported by `status`, not thrown.
     public func start(port: Int) async {
         stop()
+        // Checked before anything is bound: clamped or wrapped, a bad port
+        // would have the server listen somewhere nobody asked for.
+        guard let rawPort = UInt16(exactly: port) else {
+            status = MCPServerStatus(listening: false, port: nil, error: "Port \(port) is not a TCP port; it must be from 0 to 65535.")
+            return
+        }
         let mine = generation
         // Binding while the old listener still holds the port would report a
         // conflict against a listener of this server's own.
@@ -84,7 +97,7 @@ public final class MCPServer {
 
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = false
-        let nwPort = NWEndpoint.Port(rawValue: UInt16(clamping: port)) ?? .any
+        let nwPort = NWEndpoint.Port(rawValue: rawPort) ?? .any
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: nwPort)
 
         let listener: NWListener
@@ -95,13 +108,18 @@ public final class MCPServer {
             return
         }
         self.listener = listener
+        let connections = ConnectionRegistry()
+        self.connections = connections
 
         let handler = handleMessage
         let queue = self.queue
         let idleTimeout = self.idleTimeout
         listener.newConnectionHandler = { connection in
-            let bound = Int(listener.port?.rawValue ?? UInt16(clamping: port))
-            MCPConnection(connection: connection, port: bound, handler: handler).start(on: queue, idleTimeout: idleTimeout)
+            // One that arrives as `stop` runs is cancelled here instead.
+            guard connections.admit(connection) else { return }
+            let bound = Int(listener.port?.rawValue ?? rawPort)
+            MCPConnection(connection: connection, port: bound, handler: handler, connections: connections)
+                .start(on: queue, idleTimeout: idleTimeout)
         }
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -129,6 +147,7 @@ public final class MCPServer {
                 }
             }
             listener.start(queue: queue)
+            didBeginBinding?()
         }
     }
 
@@ -143,6 +162,10 @@ public final class MCPServer {
             closing = Task { for await _ in cancelled {} }
         }
         listener = nil
+        // Like the Node server's closeAllConnections(): a request already
+        // accepted must not reach the handler once MCP is switched off.
+        connections?.closeAll()
+        connections = nil
         status = .stopped
         // With its state handler gone, nothing else would ever let a pending start return.
         pendingStart?.resume()
@@ -159,7 +182,16 @@ public final class MCPServer {
     /// Everything between the socket and the JSON-RPC handler: the path, the
     /// method, the DNS-rebinding check, and JSON parsing. Pure, so it can be
     /// tested without a socket.
-    public static func respond(to request: HTTPRequest, port: Int, handler: Handler) async -> HTTPResponse {
+    ///
+    /// `isOpen` is asked right before each call to `handler`; once it says no,
+    /// the handler is not called again. It and `stop` both run on the main
+    /// actor, so nothing can close the connection between the two.
+    public static func respond(
+        to request: HTTPRequest,
+        port: Int,
+        handler: Handler,
+        isOpen: () -> Bool = { true }
+    ) async -> HTTPResponse {
         if let refusal = refusal(for: request.headers, port: port) {
             return .json(403, rpcError(refusal))
         }
@@ -173,13 +205,16 @@ public final class MCPServer {
             return .json(400, rpcError("Parse error: the body is not JSON", code: -32700))
         }
 
+        let closed = HTTPResponse.json(503, rpcError("The MCP server was stopped"))
         if case let .array(batch) = message {
             var replies: [JSONValue] = []
             for each in batch {
+                guard isOpen() else { return closed }
                 if let reply = await handler(each) { replies.append(reply) }
             }
             return replies.isEmpty ? HTTPResponse(status: 202) : .json(200, .array(replies))
         }
+        guard isOpen() else { return closed }
         guard let reply = await handler(message) else { return HTTPResponse(status: 202) }
         return .json(200, reply)
     }
@@ -198,19 +233,61 @@ private final class ResumeOnce {
     }
 }
 
+/// The open connections of one listener. Admitted on the listener's queue,
+/// closed from the main actor by `stop`.
+private final class ConnectionRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var open: [ObjectIdentifier: NWConnection] = [:]
+    private var closed = false
+
+    var count: Int { lock.withLock { open.count } }
+
+    /// Tracks `connection` until it is closed; once the registry is closed,
+    /// cancels it instead and returns false.
+    func admit(_ connection: NWConnection) -> Bool {
+        let admitted = lock.withLock {
+            guard !closed else { return false }
+            open[ObjectIdentifier(connection)] = connection
+            return true
+        }
+        if !admitted { connection.cancel() }
+        return admitted
+    }
+
+    func isOpen(_ connection: NWConnection) -> Bool {
+        lock.withLock { open[ObjectIdentifier(connection)] != nil }
+    }
+
+    func close(_ connection: NWConnection) {
+        lock.withLock { open[ObjectIdentifier(connection)] = nil }
+        connection.cancel()
+    }
+
+    func closeAll() {
+        let all = lock.withLock {
+            closed = true
+            defer { open = [:] }
+            return Array(open.values)
+        }
+        for connection in all { connection.cancel() }
+    }
+}
+
 /// One accepted socket: reads a request, answers it, closes.
 private final class MCPConnection: @unchecked Sendable {
     private let connection: NWConnection
     private let port: Int
     private let handler: MCPServer.Handler
+    private let connections: ConnectionRegistry
     private var buffer = Data()
     /// Touched only on the connection's queue.
     private var received = false
 
-    init(connection: NWConnection, port: Int, handler: @escaping MCPServer.Handler) {
+    init(connection: NWConnection, port: Int, handler: @escaping MCPServer.Handler, connections: ConnectionRegistry) {
         self.connection = connection
         self.port = port
         self.handler = handler
+        self.connections = connections
     }
 
     func start(on queue: DispatchQueue, idleTimeout: TimeInterval) {
@@ -219,7 +296,7 @@ private final class MCPConnection: @unchecked Sendable {
         // hold its socket, and this object, forever.
         queue.asyncAfter(deadline: .now() + idleTimeout) { [weak self] in
             guard let self, !received else { return }
-            connection.cancel()
+            connections.close(connection)
         }
         receive()
     }
@@ -231,10 +308,11 @@ private final class MCPConnection: @unchecked Sendable {
             if parsed != .incomplete { received = true }
             switch parsed {
             case let .complete(request):
-                let port = self.port
-                let handler = self.handler
-                Task {
-                    let response = await MCPServer.respond(to: request, port: port, handler: handler)
+                let (port, handler, connections, connection) = (self.port, self.handler, self.connections, self.connection)
+                Task { @MainActor in
+                    let response = await MCPServer.respond(
+                        to: request, port: port, handler: handler, isOpen: { connections.isOpen(connection) }
+                    )
                     self.send(response)
                 }
             case let .invalid(reason):
@@ -243,7 +321,7 @@ private final class MCPConnection: @unchecked Sendable {
                 send(.json(413, rpcError("Request too large")))
             case .incomplete:
                 if isComplete || error != nil {
-                    connection.cancel()
+                    connections.close(connection)
                 } else {
                     receive()
                 }
@@ -252,9 +330,11 @@ private final class MCPConnection: @unchecked Sendable {
     }
 
     private func send(_ response: HTTPResponse) {
-        connection.send(content: response.serialized(), completion: .contentProcessed { [connection] error in
+        // Closed by `stop` while the answer was being worked out: nobody to tell.
+        guard connections.isOpen(connection) else { return }
+        connection.send(content: response.serialized(), completion: .contentProcessed { [connection, connections] error in
             if let error { log.error("failed to answer: \(error.localizedDescription)") }
-            connection.cancel()
+            connections.close(connection)
         })
     }
 }

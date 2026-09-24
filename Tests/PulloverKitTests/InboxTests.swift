@@ -51,12 +51,24 @@ final class FakeFetch: @unchecked Sendable {
 final class FakeLogin: @unchecked Sendable {
     let calls = Counter()
     private let logins: [String]
+    private let lock = NSLock()
+    private var holds: [Int: Gate] = [:]
 
     init(_ logins: [String] = ["vlad"]) { self.logins = logins }
+
+    /// Holds call number `n` (1-based) until the returned gate opens.
+    func hold(_ n: Int) -> Gate {
+        lock.withLock {
+            let gate = Gate()
+            holds[n] = gate
+            return gate
+        }
+    }
 
     var closure: Inbox.FetchLogin {
         { [self] _ in
             let n = calls.increment()
+            await lock.withLock { holds[n] }?.wait()
             return logins[min(n, logins.count) - 1]
         }
     }
@@ -487,12 +499,13 @@ struct InboxRefreshTests {
         let second = Task { await inbox.refresh() }
         await settle()
 
-        // Asked for inside the first pass's final emit, so it runs after that
-        // pass has finished and before the queued pass has started.
+        // Requested synchronously inside the first pass's final emit, so it is
+        // made for certain before the queued pass starts. (Scheduling a `Task`
+        // here instead would let the queued pass win the race and start first.)
         var late: Task<Void, Never>?
         inbox.onChange = { snapshot in
             guard snapshot.status == .ready, late == nil else { return }
-            late = Task { await inbox.refresh() }
+            late = inbox.requestPass()
         }
         firstFetch.open()
         await first.value
@@ -609,6 +622,95 @@ struct InboxRefreshTests {
 
         #expect(inbox.snapshot.items.isEmpty)
         #expect(inbox.findPullRequest(repository: "acme/web", number: 1) == nil)
+    }
+
+    @Test func doesNotApplyAFetchBegunUnderThePreviousAccount() async {
+        // Signed out and back in as someone else while the old pass was in flight:
+        // a client is present again, but the old pass's result is not this account's.
+        let fetch = FakeFetch([
+            .success(fetched([pr("OLD", buckets: [.reviewRequested])])),
+            .success(fetched([pr("NEW", buckets: [.reviewRequested])])),
+        ])
+        let oldFetch = fetch.hold(1)
+        let newFetch = fetch.hold(2)
+        let inbox = makeInbox(narrowStore(defaults), fetch: fetch, login: FakeLogin(["old-user", "new-user"]))
+
+        let old = Task { await inbox.refresh() }
+        await fetch.calls.waitFor(1)
+        inbox.sessionDidChange()
+        let new = Task { await inbox.refresh() }
+        await settle()
+        oldFetch.open()
+        await old.value
+
+        // Between the passes: nothing of the old account's was applied.
+        #expect(ids(inbox).isEmpty)
+        #expect(inbox.snapshot.myLogin == nil)
+        #expect(inbox.findPullRequest(repository: "acme/web", number: 1) == nil)
+
+        await fetch.calls.waitFor(2)
+        newFetch.open()
+        await new.value
+        #expect(fetch.logins == ["old-user", "new-user"])
+        #expect(inbox.snapshot.myLogin == "new-user")
+        #expect(ids(inbox) == ["NEW"])
+    }
+
+    @Test func doesNotKeepALoginFetchedUnderThePreviousAccount() async {
+        let fetch = FakeFetch([pr("PR_1", buckets: [.reviewRequested])])
+        let login = FakeLogin(["old-user", "new-user"])
+        let oldLogin = login.hold(1)
+        let inbox = makeInbox(narrowStore(defaults), fetch: fetch, login: login)
+
+        let old = Task { await inbox.refresh() }
+        await login.calls.waitFor(1)
+        inbox.sessionDidChange()
+        let new = Task { await inbox.refresh() }
+        await settle()
+        oldLogin.open()
+        await old.value
+        await new.value
+
+        #expect(fetch.logins == ["new-user"])
+        #expect(inbox.snapshot.myLogin == "new-user")
+    }
+
+    @Test func ignoresAnAuthErrorFromThePreviousAccountsToken() async {
+        let fetch = FakeFetch([
+            .failure(httpError(401, "Bad credentials")),
+            .success(fetched([pr("NEW", buckets: [.reviewRequested])])),
+        ])
+        let held = fetch.hold(1)
+        let inbox = makeInbox(narrowStore(defaults), fetch: fetch)
+        let authErrors = Box(0)
+        inbox.onAuthError = { authErrors.value += 1 }
+
+        let old = Task { await inbox.refresh() }
+        await fetch.calls.waitFor(1)
+        inbox.sessionDidChange()
+        held.open()
+        await old.value
+
+        #expect(authErrors.value == 0)
+        #expect(inbox.snapshot.status != .error)
+
+        await inbox.refresh()
+        #expect(inbox.snapshot.status == .ready)
+        #expect(ids(inbox) == ["NEW"])
+    }
+
+    @Test func forgetsTheAccountWhenTheSessionChanges() async {
+        let login = FakeLogin(["old-user", "new-user"])
+        let inbox = makeInbox(narrowStore(defaults), fetch: FakeFetch([pr("PR_1", buckets: [.reviewRequested])]), login: login)
+        await inbox.refresh()
+        #expect(inbox.findPullRequest(repository: "acme/web", number: 1) != nil)
+
+        inbox.sessionDidChange()
+        #expect(inbox.findPullRequest(repository: "acme/web", number: 1) == nil)
+
+        await inbox.refresh()
+        #expect(login.calls.count == 2)
+        #expect(inbox.snapshot.myLogin == "new-user")
     }
 }
 
@@ -765,6 +867,20 @@ struct InboxStartStopTests {
 
         #expect(fetch.calls.count == 1)
         inbox.stop()
+    }
+
+    @Test func startsWithoutTrappingOnAnAbsurdPollInterval() async {
+        let store = narrowStore(defaults)
+        store.updateSettings { $0.pollIntervalMinutes = Int.max }
+        let fetch = FakeFetch()
+        let inbox = makeInbox(store, fetch: fetch)
+
+        inbox.start()
+        await fetch.calls.waitFor(1)
+        await inbox.whenIdle()
+        inbox.stop()
+
+        #expect(store.settings.pollIntervalMinutes == Settings.defaults.pollIntervalMinutes)
     }
 
     @Test func callingStartTwiceRefreshesOncePerCall() async {

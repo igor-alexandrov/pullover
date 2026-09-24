@@ -24,7 +24,7 @@ struct InboxListView: View {
             .scrollIndicators(.automatic)
             .coordinateSpace(name: "list")
             .onAppear { model.ensureSelection() }
-            .onChange(of: model.snapshot.items.count) { model.ensureSelection() }
+            .onChange(of: model.visibleItems.map(\.id)) { model.ensureSelection() }
             .onChange(of: model.scrollRequest) {
                 guard let id = model.selectedID else { return }
                 proxy.scrollTo(id)

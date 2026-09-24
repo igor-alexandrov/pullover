@@ -99,7 +99,7 @@ private func detailNodes(_ data: Data?) throws -> [PullRequestNode]? {
 /// Adds up the `rateLimit` of every response in one fetch. Measured rather
 /// than derived: GitHub's documented formula assumes every connection returns
 /// a full page, which overstates the details query by orders of magnitude.
-private actor RateMeter {
+actor RateMeter {
     var cost = 0
     var lowest: (remaining: Int, resetAt: String)?
 
@@ -119,12 +119,20 @@ private actor RateMeter {
     }
 }
 
-private struct MeteredClient: GraphQLClient {
+struct MeteredClient: GraphQLClient {
     let inner: any GraphQLClient
     let meter: RateMeter
 
     func execute(_ query: String, variables: [String: JSONValue]) async throws -> Data {
-        let data = try await inner.execute(query, variables: variables)
+        let data: Data
+        do {
+            data = try await inner.execute(query, variables: variables)
+        } catch {
+            // A GraphQL error with partial `data` was still charged for, and
+            // carries its `rateLimit` like any other answer.
+            if let partial = graphqlPartialData(error) { await meter.record(partial) }
+            throw error
+        }
         await meter.record(data)
         return data
     }
@@ -143,19 +151,26 @@ public func fetchViewerLogin(_ client: any GraphQLClient) async throws -> String
 
 /// One more attempt at a request that failed on GitHub's side, with no backoff:
 /// throttling arrives as a 403 or 429, which the inbox waits out on its own.
+/// Never once the fetch is cancelled: a dropped request is then no outage.
 private func retryTransient<T: Sendable>(_ attempt: () async throws -> T) async throws -> T {
     do {
         return try await attempt()
     } catch where isTransientError(error) {
+        try Task.checkCancellation()
         return try await attempt()
     }
 }
 
 /// One locked-down org must not blank the whole inbox: GitHub fails the search
 /// and names the org, so ask again excluding it until the search goes through.
+///
+/// An org is excluded whenever GitHub names a new one, even alongside an
+/// unrelated error, since the restriction may be what tripped the rest. Only
+/// an answer whose sole complaint is the restriction may stand in for the
+/// bucket, though: any other error that survives the exclusion is thrown.
 private func searchBucket(_ client: any GraphQLClient, _ bucket: SearchBucket) async throws -> (ids: [String], restrictedOrgs: [String]) {
     var excluded: [String] = []
-    var lastRestriction: (any Error)?
+    var lastError: (any Error)?
 
     for _ in 0..<maxExclusionRounds {
         do {
@@ -169,8 +184,8 @@ private func searchBucket(_ client: any GraphQLClient, _ bucket: SearchBucket) a
             return (ids, excluded)
         } catch {
             let named = restrictedOrganizations(error)
-            guard !named.isEmpty, isOnlyRestriction(error) else { throw error }
-            lastRestriction = error
+            guard !named.isEmpty else { throw error }
+            lastError = error
             let fresh = named.filter { !excluded.contains($0) }
             if fresh.isEmpty { break }
             excluded += fresh
@@ -178,11 +193,12 @@ private func searchBucket(_ client: any GraphQLClient, _ bucket: SearchBucket) a
     }
 
     // GitHub named the same orgs again or the rounds ran out. Keep whatever came
-    // back alongside the last error — but only if something did: with no payload
-    // there is nothing to stand in for the bucket, and "empty" would be a lie.
-    guard let ids = searchIds(graphqlPartialData(lastRestriction)) else {
-        throw lastRestriction ?? GitHubError.malformed("GitHub answered the search with no result set")
-    }
+    // back alongside the last error — but only if the restriction was all that
+    // went wrong, and only if something did come back: with no payload there is
+    // nothing to stand in for the bucket, and "empty" would be a lie.
+    let fallback = GitHubError.malformed("GitHub answered the search with no result set")
+    guard let lastError else { throw fallback }
+    guard isOnlyRestriction(lastError), let ids = searchIds(graphqlPartialData(lastError)) else { throw lastError }
     return (ids, excluded)
 }
 
@@ -213,6 +229,7 @@ private func fetchDetails(
             return (salvaged, orgs)
         }
         guard isTransientError(error), maySplit else { throw error }
+        try Task.checkCancellation()
         if ids.count == 1 { return try await fetchDetails(client, ids, maySplit: false) }
 
         let half = (ids.count + 1) / 2

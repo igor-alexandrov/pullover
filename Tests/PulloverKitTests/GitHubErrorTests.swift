@@ -147,6 +147,36 @@ private let unrelatedGraphQLError = graphqlError(["Field \"bogus\" does not exis
     @Test func readsTheOrgOutOfAPlain403WhichCarriesItOnlyOnItsMessage() {
         #expect(restrictedOrganizations(httpError(403, restrictionMessage("status-im"))) == ["status-im"])
     }
+
+    @Test func readsGitHubsFullRealMessage() {
+        let real = "Although you appear to have the correct authorization credentials, the `acme` organization has enabled OAuth App access restrictions, meaning that data access to third-parties is limited. For more information on these policies, including how to update them, see https://docs.github.com/articles/restricting-access-to-your-organization-s-data/"
+        #expect(restrictedOrganizations(graphqlError([real], data: nil)) == ["acme"])
+    }
+
+    @Test func survivesRewordingOfTheSentenceAroundTheOrg() {
+        let reworded = [
+            "The `acme` organization has OAuth App access restrictions enabled.",
+            "`acme` organization restricts data access to third-party applications.",
+            "the `acme`  organization has enabled OAuth App access restrictions",
+        ]
+        for message in reworded {
+            #expect(restrictedOrganizations(graphqlError([message], data: nil)) == ["acme"], "\(message)")
+            #expect(isOnlyRestriction(graphqlError([message], data: nil)), "\(message)")
+        }
+    }
+
+    @Test func ignoresAnOrgNamedInAnErrorThatIsNotARestriction() {
+        #expect(restrictedOrganizations(graphqlError(["The `acme` organization could not be found."], data: nil)).isEmpty)
+    }
+
+    @Test func doesNotPairAnOrgInOneEntryWithARestrictionMarkerInAnother() {
+        let error = graphqlError([
+            "The `acme` organization could not be found.",
+            "Resource protected by access restrictions.",
+        ], data: nil)
+        #expect(restrictedOrganizations(error).isEmpty)
+        #expect(!isOnlyRestriction(error))
+    }
 }
 
 @Suite struct IsOnlyRestrictionTests {

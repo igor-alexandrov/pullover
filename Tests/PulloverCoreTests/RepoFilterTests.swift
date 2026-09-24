@@ -65,5 +65,10 @@ private func pr(_ id: String, _ repository: String) -> PullRequest {
         @Test("counts a selected repository that has nothing open right now") func selectedOnly() {
             #expect(repositorySummary(watchAll: false, known: [], selected: ["acme/api"]) == "1 of 1")
         }
+
+        @Test("counts a selection saved twice, or in two casings, once") func duplicates() {
+            #expect(repositorySummary(watchAll: false, known: [], selected: ["acme/api", "acme/api"]) == "1 of 1")
+            #expect(repositorySummary(watchAll: false, known: ["Acme/API"], selected: ["acme/api", "ACME/Api"]) == "1 of 1")
+        }
     }
 }

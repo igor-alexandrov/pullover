@@ -50,6 +50,12 @@ private func map(_ n: PullRequestNode, _ buckets: [SearchBucket] = []) -> PullRe
             #expect(pr.buckets == [.reviewRequested])
         }
 
+        @Test("reads whether the head branch lives in a fork, defaulting to no") func crossRepository() {
+            #expect(map(node(["isCrossRepository": true])).isCrossRepository)
+            #expect(!map(node(["isCrossRepository": false])).isCrossRepository)
+            #expect(!map(node()).isCrossRepository)
+        }
+
         @Test("falls back to ghost for a deleted author") func ghostAuthor() {
             let pr = map(node(["author": jsonNull]))
             #expect(pr.authorLogin == "ghost")
@@ -115,6 +121,18 @@ private func map(_ n: PullRequestNode, _ buckets: [SearchBucket] = []) -> PullRe
             #expect(pr.ciStatus == .failure)
         }
 
+        @Test("reads the head commit's SHA") func headSHA() {
+            let pr = map(node(["commits": nodes([
+                ["commit": ["oid": "abc123", "committedDate": "2026-08-04T10:00:00Z", "statusCheckRollup": ["state": "SUCCESS"]]],
+            ])]))
+            #expect(pr.headSHA == "abc123")
+        }
+
+        @Test("leaves the SHA empty when the node has none") func noHeadSHA() {
+            let pr = map(node(["commits": nodes([commit("2026-08-04T10:00:00Z", "SUCCESS")])]))
+            #expect(pr.headSHA == nil)
+        }
+
         @Test("reads lastCommitPushedAt and ciStatus from the first commit node when there are several") func firstCommitNode() {
             let pr = map(node(["commits": nodes([
                 commit("2026-08-01T10:00:00Z", "SUCCESS"),
@@ -130,17 +148,29 @@ private func map(_ n: PullRequestNode, _ buckets: [SearchBucket] = []) -> PullRe
             #expect(pr.ciStatus == CIStatus.none)
         }
 
-        @Test("flattens conversation comments in order, skipping null nodes and null authors") func conversationComments() {
+        @Test("flattens conversation comments in order, skipping null nodes and keeping deleted authors as ghost") func conversationComments() {
             let pr = map(node(["comments": nodes([
                 comment("alice", "2026-08-01T10:00:00Z", "first"),
                 jsonNull,
-                comment(nil, "2026-08-02T10:00:00Z", "ghost"),
+                comment(nil, "2026-08-02T10:00:00Z", "from a deleted account"),
                 comment("bob", "2026-08-03T10:00:00Z", "second"),
             ])]))
             #expect(pr.conversationComments == [
                 makeComment("alice", "2026-08-01T10:00:00Z", "first"),
+                makeComment("ghost", "2026-08-02T10:00:00Z", "from a deleted account"),
                 makeComment("bob", "2026-08-03T10:00:00Z", "second"),
             ])
+        }
+
+        @Test("keeps a deleted user's last reply in a thread, so the thread still awaits my reply") func deletedUserLastReply() {
+            let pr = map(node(["reviewThreads": nodes([
+                thread("RT_1", resolved: false, [
+                    comment("vlad", "2026-08-02T10:00:00Z", "why this?"),
+                    comment(nil, "2026-08-03T10:00:00Z", "because"),
+                ]),
+            ])]))
+            #expect(pr.reviewThreads.first?.comments.last == makeComment("ghost", "2026-08-03T10:00:00Z", "because"))
+            #expect(threadsAwaitingMyReply(pr, myLogin: "vlad").map(\.id) == ["RT_1"])
         }
 
         @Test("drops a review with no submittedAt or an unknown state") func dropsUnmappableReviews() {
@@ -266,6 +296,11 @@ private func map(_ n: PullRequestNode, _ buckets: [SearchBucket] = []) -> PullRe
                 thread("RT_2", resolved: true, [comment("bob", "2026-08-09T10:00:00Z", "@vlad but this got resolved")]),
             ])]))
             #expect(pr.mentionsAt.last == d("2026-08-02T10:00:00Z"))
+        }
+
+        @Test("counts a mention in a comment by a deleted user") func deletedUserMention() {
+            let pr = map(node(["comments": nodes([comment(nil, "2026-08-04T10:00:00Z", "@vlad over to you")])]))
+            #expect(pr.mentionsAt == [d("2026-08-04T10:00:00Z")])
         }
 
         @Test("does not count a mention the user wrote themselves") func ownComment() {

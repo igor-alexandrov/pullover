@@ -45,6 +45,10 @@ public enum GlobalShortcut: String, Codable, CaseIterable, Sendable {
 
 public struct Settings: Hashable, Codable, Sendable {
     public static let pollIntervalOptions = [1, 5, 15, 30]
+    /// What a stored interval may be: at least a minute, at most a day. Anything
+    /// outside — hand-edited or corrupt — falls back to the default, so the
+    /// poller never multiplies a huge value into an overflow.
+    public static let pollIntervalRange = 1...1440
 
     public var pollIntervalMinutes: Int
     public var repositories: [String]
@@ -89,7 +93,7 @@ public struct Settings: Hashable, Codable, Sendable {
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Settings.defaults
-        pollIntervalMinutes = (try? c.decode(Int.self, forKey: .pollIntervalMinutes)).flatMap { $0 > 0 ? $0 : nil }
+        pollIntervalMinutes = (try? c.decode(Int.self, forKey: .pollIntervalMinutes)).flatMap { Settings.pollIntervalRange.contains($0) ? $0 : nil }
             ?? d.pollIntervalMinutes
         repositories = (try? c.decode([String].self, forKey: .repositories)) ?? d.repositories
         watchAllRepositories = (try? c.decode(Bool.self, forKey: .watchAllRepositories)) ?? d.watchAllRepositories

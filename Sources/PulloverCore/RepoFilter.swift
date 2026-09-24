@@ -28,8 +28,12 @@ public func repositoryOptions(known: [String], selected: [String]) -> [String] {
 
 /// What the Repositories row shows: how many offered repositories are ticked,
 /// or that all of them are watched. Divides by the same union the picker
-/// lists, so it cannot read "1 of 0".
+/// lists, so it cannot read "1 of 0"; counts selections folded the same way,
+/// so duplicate or case-variant entries an older build saved cannot read "2 of 1".
 public func repositorySummary(watchAll: Bool, known: [String], selected: [String]) -> String {
     if watchAll { return "All" }
-    return "\(selected.count) of \(repositoryOptions(known: known, selected: selected).count)"
+    let options = repositoryOptions(known: known, selected: selected)
+    let ticked = Set(selected.map { $0.lowercased() })
+    let tickedCount = options.filter { ticked.contains($0.lowercased()) }.count
+    return "\(tickedCount) of \(options.count)"
 }
